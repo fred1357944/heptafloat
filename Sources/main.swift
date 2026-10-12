@@ -1117,6 +1117,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             window.title = "General"
             window.isReleasedWhenClosed = false
             window.level = .floating // stay above the floating card
+            window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary] // open where you are, never switch desktops
             window.center()
             settingsWindow = window
         }
