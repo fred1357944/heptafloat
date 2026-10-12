@@ -33,10 +33,10 @@ Opening Heptabase, finding today's journal, and switching back breaks your flow.
 | <img src="docs/screenshot-commands.png" alt="The / command menu"> | <img src="docs/screenshot-mention.png" alt="Searching cards with @"> |
 | **Type `/` for blocks** — to-dos, headings, bullets, toggles, quotes, dividers, today's date. | **Type `@` to mention a card** from your Heptabase library. Click a mention to open it in Heptabase. |
 
-- **One shortcut to show and hide** — <kbd>⌃</kbd> <kbd>⌥</kbd> <kbd>J</kbd> by default; pick another in the menu bar.
+- **One shortcut to show and hide** — <kbd>⌃</kbd> <kbd>⌥</kbd> <kbd>J</kbd> by default; record any shortcut you like in Settings.
 - **Saves as you type** and stays in sync with Heptabase both ways.
 - **Always today's page** — at midnight it moves to the new day's journal on its own.
-- **Lives in your menu bar**, no Dock icon. Can start when you log in.
+- **Simple settings** — shortcut, theme, text size, keep on top, launch at login, and a check that Heptabase is connected.
 
 ## Install
 
@@ -55,7 +55,7 @@ HeptaFloat talks to Heptabase through Heptabase's built-in **CLI** (its local co
 2. In Heptabase, open **Settings** and turn on the **CLI** (install/enable it). Heptabase may require an active subscription for this.
 3. That's it — open HeptaFloat and today's journal appears.
 
-> If the card says *"heptabase CLI not found"* or *"Heptabase isn't responding"*, Heptabase is closed or its CLI is turned off.
+To double-check, open **HeptaFloat → Settings…** (<kbd>⌘</kbd> <kbd>,</kbd>). The **Heptabase** section shows a green **Connected** when everything is set up, or tells you what's missing (Heptabase not running, CLI turned off, …).
 
 ## How to use it
 
@@ -74,9 +74,21 @@ HeptaFloat talks to Heptabase through Heptabase's built-in **CLI** (its local co
 
 You can also type Markdown: `- ` bullets, `1. ` numbers, `[] ` to-dos, `# ` headings, `> ` quotes, `---` dividers.
 
-**Menu bar icon** (the little note): show/hide, **Keep on Top** (turn off to make the card tuck away when you switch apps), **Appearance** (System / Light / Dark), **Shortcut**, **Open in Heptabase**, **Launch at Login**, and Quit.
+### Settings
 
-> Using Raycast or another launcher? Set HeptaFloat's own **Shortcut** to the key you like instead of a launcher hotkey — macOS doesn't let launchers hide menu-bar apps, so only HeptaFloat's shortcut can toggle it both ways.
+Open **HeptaFloat → Settings…** from the menu at the top-left of your screen, or press <kbd>⌘</kbd> <kbd>,</kbd> while the card is in front.
+
+<p align="center"><img src="docs/screenshot-settings.png" width="420" alt="HeptaFloat Settings: shortcut, keep on top, launch at login, theme, text size, Heptabase connection"></p>
+
+- **Show / hide shortcut** — click the button and press the keys you want. <kbd>Esc</kbd> cancels, **Reset** goes back to <kbd>⌃</kbd> <kbd>⌥</kbd> <kbd>J</kbd>.
+- **Keep on top of other windows** — on: the card floats above everything. Off: it tucks away when you switch apps.
+- **Launch at login** — start HeptaFloat when you log in, so the shortcut always works.
+- **Theme** and **Text size**.
+- **Heptabase** — shows whether HeptaFloat can reach your journal, with **Check Again** and **Open Heptabase**.
+
+The menus at the top of the screen have the rest: **File → Open in Heptabase**, **View → Keep on Top / Appearance / text size**, **Window → Show Journal**, and **Help**.
+
+> Using Raycast or another launcher? A launcher hotkey that opens HeptaFloat works too — press it again to hide. Just don't give the launcher and HeptaFloat's own shortcut the same keys.
 
 ## Privacy
 
@@ -94,10 +106,10 @@ HeptaFloat runs entirely on your Mac. It reads and saves your journal through th
 
 ## For developers
 
-HeptaFloat is a native Swift shell (floating `NSPanel`, global hotkey, menu bar item) around a [ProseMirror](https://prosemirror.net) editor in a `WKWebView`. It reads and writes the journal with the Heptabase CLI (`heptabase journal read/save`), with md5 conflict checks.
+HeptaFloat is a native Swift shell (floating `NSPanel`, global hotkey, SwiftUI Settings) around a [ProseMirror](https://prosemirror.net) editor in a `WKWebView`. It reads and writes the journal with the Heptabase CLI (`heptabase journal read/save`), with md5 conflict checks.
 
 ```
-Sources/main.swift   app shell: window, hotkey, menu bar, CLI bridge
+Sources/main.swift   app shell: window, hotkey, menus, Settings, CLI bridge
 src/schema.js        lossless ProseMirror schema for Heptabase's card format
 src/editor.js        editor state, autosave, sync, day rollover
 src/commands.js      list editing (indent, split, toggle…)

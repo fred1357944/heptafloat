@@ -5,6 +5,7 @@
 import AppKit
 import Carbon.HIToolbox
 import ServiceManagement
+import SwiftUI
 import WebKit
 
 // MARK: - Heptabase CLI
@@ -126,19 +127,21 @@ enum Settings {
         get { defaults.object(forKey: "fontScale") as? Double ?? 1.0 }
         set { defaults.set(min(max(newValue, 0.7), 1.8), forKey: "fontScale") }
     }
-    /// e.g. "ctrl+opt+j". Chosen from the menu bar's Shortcut menu; any spec works via `defaults write`.
+    static let defaultHotkey = "ctrl+opt+j"
+    /// e.g. "ctrl+opt+j"; recorded in Settings.
     static var hotkey: String {
-        get { defaults.string(forKey: "hotkey") ?? "ctrl+opt+j" }
+        get { defaults.string(forKey: "hotkey") ?? defaultHotkey }
         set { defaults.set(newValue, forKey: "hotkey") }
     }
+
+    /// Posted when a setting changes outside the Settings window (menus, the pin button).
+    static let changed = Notification.Name("HeptaFloatSettingsChanged")
 }
 
 // MARK: - Global hotkey
 
 /// A system-wide hotkey via Carbon, which needs no Accessibility permission.
 final class HotKey {
-    static let presets = ["ctrl+opt+j", "opt+n", "opt+space", "cmd+shift+j", "ctrl+opt+n"]
-
     let display: String
     private var ref: EventHotKeyRef?
     private var handler: EventHandlerRef?
@@ -168,6 +171,20 @@ final class HotKey {
             }
         }
         return key.map { ($0, mods, symbols) }
+    }
+
+    /// Turns a key press into a spec like "ctrl+opt+j". Needs ⌘, ⌃ or ⌥, so plain typing never
+    /// becomes a global shortcut.
+    static func spec(from event: NSEvent) -> String? {
+        let flags = event.modifierFlags
+        guard !flags.intersection([.command, .control, .option]).isEmpty,
+              let key = keyCodes.first(where: { $0.value == Int(event.keyCode) })?.key else { return nil }
+        var parts: [String] = []
+        if flags.contains(.control) { parts.append("ctrl") }
+        if flags.contains(.option) { parts.append("opt") }
+        if flags.contains(.shift) { parts.append("shift") }
+        if flags.contains(.command) { parts.append("cmd") }
+        return (parts + [key]).joined(separator: "+")
     }
 
     init?(_ spec: String, action: @escaping () -> Void) {
@@ -286,18 +303,32 @@ final class JournalWindow: NSObject, WKScriptMessageHandler, WKNavigationDelegat
 
     var isShown: Bool { panel.isVisible && NSApp.isActive && panel.isKeyWindow }
 
+    /// The app that was in front before the card appeared, to hand focus back to on hide.
+    private var previousApp: NSRunningApplication?
+
     func show() {
+        if let front = NSWorkspace.shared.frontmostApplication, front != NSRunningApplication.current {
+            previousApp = front
+        }
         NSApp.unhide(nil)
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         web.evaluateJavaScript("window.hf && window.hf.shown()")
     }
 
+    func flushSoon() { web.evaluateJavaScript("window.hf && window.hf.flush()") }
+
     /// Hides and hands focus back to whatever app was in front, like Raycast.
     func hide() {
-        web.evaluateJavaScript("window.hf && window.hf.flush()")
+        flushSoon()
         panel.orderOut(nil)
+        returnFocus()
+    }
+
+    /// Steps aside for the app that was in front before the card appeared.
+    func returnFocus() {
         NSApp.hide(nil)
+        if let previousApp, !previousApp.isTerminated { previousApp.activate() }
     }
 
     func toggle() { isShown ? hide() : show() }
@@ -307,11 +338,12 @@ final class JournalWindow: NSObject, WKScriptMessageHandler, WKNavigationDelegat
     func togglePinned() {
         Settings.pinned.toggle()
         applyPinned()
+        NotificationCenter.default.post(name: Settings.changed, object: nil)
     }
 
     /// Pinned: floats above everything and stays when you click away. Unpinned: a normal window
     /// that tucks itself away when you switch apps.
-    private func applyPinned() {
+    func applyPinned() {
         let pinned = Settings.pinned
         panel.level = pinned ? .floating : .normal
         panel.hidesOnDeactivate = !pinned
@@ -324,8 +356,16 @@ final class JournalWindow: NSObject, WKScriptMessageHandler, WKNavigationDelegat
 
     func adjustFont(by delta: Double?) {
         Settings.fontScale = delta.map { Settings.fontScale + $0 } ?? 1.0
+        applyFontScale()
+        NotificationCenter.default.post(name: Settings.changed, object: nil)
+    }
+
+    func applyFontScale() {
         web.evaluateJavaScript("window.hf.setScale(\(Settings.fontScale))")
     }
+
+    func undo() { web.evaluateJavaScript("window.hf.undo()") }
+    func redo() { web.evaluateJavaScript("window.hf.redo()") }
 
     func openInHeptabase() {
         web.evaluateJavaScript("document.getElementById('open').click()")
@@ -402,7 +442,6 @@ final class JournalWindow: NSObject, WKScriptMessageHandler, WKNavigationDelegat
             hide()
         case "togglePin":
             togglePinned()
-            (NSApp.delegate as? AppDelegate)?.refreshMenu()
         default: break
         }
     }
@@ -427,44 +466,327 @@ final class JournalWindow: NSObject, WKScriptMessageHandler, WKNavigationDelegat
     }
 }
 
+// MARK: - Heptabase connection check
+
+/// What the Settings window shows about Heptabase: is it installed, running, and letting us in.
+struct ConnectionStatus {
+    enum Level { case checking, ok, problem }
+    var level: Level
+    var title: String
+    var detail: String
+
+    static let checking = ConnectionStatus(level: .checking, title: "Checking…", detail: "")
+}
+
+extension Heptabase {
+    static let appBundleID = "app.projectmeta.projectmeta"
+
+    static var isAppRunning: Bool {
+        if !NSRunningApplication.runningApplications(withBundleIdentifier: appBundleID).isEmpty { return true }
+        return NSWorkspace.shared.runningApplications.contains { $0.localizedName == "Heptabase" }
+    }
+
+    static var appURL: URL? {
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: appBundleID)
+            ?? ["/Applications/Heptabase.app", NSHomeDirectory() + "/Applications/Heptabase.app"]
+                .map(URL.init(fileURLWithPath:)).first { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
+    /// Tries a real read of today's journal, so a passing check means saving will work too.
+    static func checkConnection() -> ConnectionStatus {
+        guard appURL != nil else {
+            return ConnectionStatus(level: .problem, title: "Heptabase isn't installed",
+                                    detail: "Install the Heptabase desktop app from heptabase.com.")
+        }
+        guard cliPath != nil else {
+            return ConnectionStatus(level: .problem, title: "Heptabase CLI is off",
+                                    detail: "In Heptabase, open Settings and turn on the CLI, then check again.")
+        }
+        guard isAppRunning else {
+            return ConnectionStatus(level: .problem, title: "Heptabase isn't running",
+                                    detail: "Open Heptabase — HeptaFloat saves through it.")
+        }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        do {
+            let journal = try readJournal(formatter.string(from: Date()))
+            let title = journal["title"] as? String ?? "today's journal"
+            return ConnectionStatus(level: .ok, title: "Connected", detail: "Reading and saving \(title).")
+        } catch {
+            let message = (error as? Failure)?.message ?? "\(error)"
+            return ConnectionStatus(level: .problem, title: "Heptabase didn't respond", detail: message)
+        }
+    }
+}
+
+// MARK: - Settings window
+
+final class SettingsModel: ObservableObject {
+    @Published var hotkey = Settings.hotkey
+    @Published var hotkeyProblem: String?
+    @Published var appearance = Settings.appearance
+    @Published var pinned = Settings.pinned
+    @Published var fontScale = Settings.fontScale
+    @Published var launchAtLogin = SMAppService.mainApp.status == .enabled
+    @Published var loginProblem: String?
+    @Published var connection = ConnectionStatus.checking
+
+    /// Hooks into the running app, set by AppDelegate.
+    var applyHotkey: () -> Bool = { true }
+    var pauseHotkey: () -> Void = {}
+    var applyAppearance: () -> Void = {}
+    var applyPinned: () -> Void = {}
+    var applyFontScale: () -> Void = {}
+
+    init() {
+        NotificationCenter.default.addObserver(forName: Settings.changed, object: nil, queue: .main) { [weak self] _ in
+            self?.reload()
+        }
+    }
+
+    func reload() {
+        hotkey = Settings.hotkey
+        appearance = Settings.appearance
+        pinned = Settings.pinned
+        fontScale = Settings.fontScale
+        launchAtLogin = SMAppService.mainApp.status == .enabled
+    }
+
+    func setHotkey(_ spec: String) {
+        let previous = Settings.hotkey
+        Settings.hotkey = spec
+        if applyHotkey() {
+            hotkey = spec
+            hotkeyProblem = nil
+        } else {
+            Settings.hotkey = previous
+            _ = applyHotkey()
+            hotkeyProblem = "That shortcut isn't available. Try another one."
+        }
+    }
+
+    func setAppearance(_ a: Appearance) { Settings.appearance = a; appearance = a; applyAppearance() }
+    func setPinned(_ on: Bool) { Settings.pinned = on; pinned = on; applyPinned() }
+    func setFontScale(_ v: Double) { Settings.fontScale = v; fontScale = Settings.fontScale; applyFontScale() }
+
+    func setLaunchAtLogin(_ on: Bool) {
+        do {
+            if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+            loginProblem = nil
+        } catch {
+            loginProblem = error.localizedDescription
+        }
+        launchAtLogin = SMAppService.mainApp.status == .enabled
+        if on && SMAppService.mainApp.status == .requiresApproval {
+            loginProblem = "Allow HeptaFloat in System Settings → General → Login Items."
+        }
+    }
+
+    func checkConnection() {
+        connection = .checking
+        Heptabase.queue.async {
+            let status = Heptabase.checkConnection()
+            DispatchQueue.main.async { self.connection = status }
+        }
+    }
+}
+
+/// Click, then press the keys you want. Esc cancels.
+struct ShortcutRecorder: View {
+    @ObservedObject var model: SettingsModel
+    @State private var recording = false
+    @State private var monitor: Any?
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Button(action: { recording ? stop() : start() }) {
+                Text(recording ? "Press keys…" : (HotKey.parse(model.hotkey)?.display ?? "None"))
+                    .font(.system(.body, design: .rounded).weight(.medium))
+                    .frame(minWidth: 96)
+            }
+            .buttonStyle(.bordered)
+            .tint(recording ? .accentColor : nil)
+            if model.hotkey != Settings.defaultHotkey && !recording {
+                Button("Reset") { model.setHotkey(Settings.defaultHotkey) }
+                    .buttonStyle(.borderless)
+            }
+        }
+        .onDisappear(perform: stop)
+    }
+
+    private func start() {
+        recording = true
+        model.pauseHotkey() // so pressing the current shortcut doesn't toggle the card
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            if event.keyCode == UInt16(kVK_Escape) { stop(); return nil }
+            if let spec = HotKey.spec(from: event) {
+                recording = false
+                removeMonitor()
+                model.setHotkey(spec)
+            } else {
+                NSSound.beep()
+            }
+            return nil
+        }
+    }
+
+    private func stop() {
+        guard recording else { return }
+        recording = false
+        removeMonitor()
+        _ = model.applyHotkey()
+    }
+
+    private func removeMonitor() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+    }
+}
+
+struct SettingsView: View {
+    @ObservedObject var model: SettingsModel
+
+    var body: some View {
+        Form {
+            Section {
+                LabeledContent("Show / hide shortcut") { ShortcutRecorder(model: model) }
+                if let problem = model.hotkeyProblem {
+                    Text(problem).font(.callout).foregroundStyle(.red)
+                }
+                Toggle("Keep on top of other windows", isOn: Binding(get: { model.pinned }, set: model.setPinned))
+                Toggle("Launch at login", isOn: Binding(get: { model.launchAtLogin }, set: model.setLaunchAtLogin))
+                if let problem = model.loginProblem {
+                    Text(problem).font(.callout).foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("General")
+            } footer: {
+                Text("With “Keep on top” off, the card tucks away when you switch to another app.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+
+            Section("Appearance") {
+                Picker("Theme", selection: Binding(get: { model.appearance }, set: model.setAppearance)) {
+                    ForEach(Appearance.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                LabeledContent("Text size") {
+                    HStack {
+                        Image(systemName: "textformat.size.smaller").foregroundStyle(.secondary)
+                        Slider(value: Binding(get: { model.fontScale }, set: model.setFontScale), in: 0.7...1.8, step: 0.05)
+                            .frame(width: 160)
+                        Image(systemName: "textformat.size.larger").foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            Section("Heptabase") {
+                HStack(alignment: .top, spacing: 10) {
+                    Group {
+                        switch model.connection.level {
+                        case .checking: ProgressView().controlSize(.small)
+                        case .ok: Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                        case .problem: Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                        }
+                    }
+                    .frame(width: 18, height: 18)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(model.connection.title).fontWeight(.medium)
+                        if !model.connection.detail.isEmpty {
+                            Text(model.connection.detail).font(.callout).foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                    }
+                    Spacer()
+                    Button("Check Again", action: model.checkConnection)
+                        .disabled(model.connection.level == .checking)
+                }
+                if model.connection.level == .problem, let url = Heptabase.appURL {
+                    Button("Open Heptabase") { NSWorkspace.shared.open(url) }
+                }
+            }
+
+            Section {
+                LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev")
+                Link("HeptaFloat on GitHub", destination: URL(string: "https://github.com/madeyexz/heptafloat")!)
+            }
+        }
+        .formStyle(.grouped)
+        .frame(width: 460)
+        .fixedSize(horizontal: false, vertical: true)
+        .onAppear(perform: model.checkConnection)
+    }
+}
+
 // MARK: - App
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate {
     private var journal: JournalWindow!
     private var hotKey: HotKey?
-    private var statusItem: NSStatusItem!
     private var flushed = false
+    private let settings = SettingsModel()
+    private var settingsWindow: NSWindow?
+    private var pinItem: NSMenuItem?
+    private var appearanceItems: [NSMenuItem] = []
+    private var showItem: NSMenuItem?
+
+    /// When our own global hotkey last fired, and whether that press showed the card.
+    private var hotkeyPressedAt = Date.distantPast
+    private var hotkeyShowed = false
 
     func applicationDidFinishLaunching(_ n: Notification) {
         journal = JournalWindow()
-        registerHotKey()
+        settings.applyHotkey = { [weak self] in self?.registerHotKey() ?? false }
+        settings.pauseHotkey = { [weak self] in self?.hotKey = nil }
+        settings.applyAppearance = { [weak self] in self?.journal.applyAppearance(); self?.refreshMenu() }
+        settings.applyPinned = { [weak self] in self?.journal.applyPinned(); self?.refreshMenu() }
+        settings.applyFontScale = { [weak self] in self?.journal.applyFontScale() }
+        NotificationCenter.default.addObserver(forName: Settings.changed, object: nil, queue: .main) { [weak self] _ in
+            self?.refreshMenu()
+        }
+        _ = registerHotKey()
         buildMainMenu()
-        buildStatusItem()
         journal.show()
     }
 
-    /// When HeptaFloat was last brought to the front (by a launcher or by clicking it).
-    private var activatedAt = Date.distantPast
-    /// When our own global hotkey last fired.
-    private var hotkeyPressedAt = Date.distantPast
-
-    func applicationWillBecomeActive(_ notification: Notification) {
-        activatedAt = Date()
+    @discardableResult
+    private func registerHotKey() -> Bool {
+        hotKey = nil
+        hotKey = HotKey(Settings.hotkey) { [weak self] in
+            guard let self else { return }
+            self.hotkeyPressedAt = Date()
+            self.hotkeyShowed = !self.journal.isShown
+            self.journal.toggle()
+        }
+        refreshMenu()
+        return hotKey != nil
     }
 
-    /// Launchers like Raycast "open" the app on every press, and an accessory app never counts as
-    /// frontmost for their own hide-if-frontmost toggle. So reopening toggles here instead: if this
-    /// open is what just brought us forward, show; if we were already up front, hide.
+    private var hotkeyJustFired: Bool { Date().timeIntervalSince(hotkeyPressedAt) < 0.6 }
+
+    /// Dock clicks and launchers "reopen" the app. A launcher bound to the same keys as our hotkey
+    /// sends one right after the hotkey has already toggled; ignore that echo, and give focus back
+    /// if it re-activated a hidden card.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
-        // A launcher bound to the same keys as our hotkey opens the app right after the hotkey has
-        // already toggled; ignore that echo, and give focus back if it re-activated a hidden card.
-        if Date().timeIntervalSince(hotkeyPressedAt) < 0.6 {
-            if !journal.panel.isVisible { NSApp.hide(nil) }
-            return false
+        if hotkeyJustFired {
+            if !journal.panel.isVisible { journal.returnFocus() }
+        } else {
+            journal.show()
         }
-        let justActivated = Date().timeIntervalSince(activatedAt) < 0.5
-        if journal.isShown && !justActivated { journal.hide() } else { journal.show() }
         return false
+    }
+
+    /// Hidden by anything (⌘H, a launcher): save first. If a launcher bound to the same keys
+    /// hid us right after our hotkey showed the card, undo that.
+    func applicationDidHide(_ notification: Notification) {
+        journal.flushSoon()
+        if hotkeyJustFired && hotkeyShowed { DispatchQueue.main.async { self.journal.show() } }
+    }
+
+    /// ⌘-Tab into HeptaFloat while the card is hidden brings the card back.
+    func applicationDidBecomeActive(_ notification: Notification) {
+        guard !hotkeyJustFired, !journal.panel.isVisible, settingsWindow?.isVisible != true else { return }
+        journal.show()
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -476,151 +798,131 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return .terminateCancel
     }
 
-    private func registerHotKey() {
-        hotKey = nil
-        hotKey = HotKey(Settings.hotkey) { [weak self] in
-            self?.hotkeyPressedAt = Date()
-            self?.journal.toggle()
-        }
-    }
-
     // MARK: actions
 
-    @objc func setShortcut(_ item: NSMenuItem) {
-        guard let spec = item.representedObject as? String else { return }
-        Settings.hotkey = spec
-        registerHotKey()
-        if hotKey == nil {
-            let alert = NSAlert()
-            alert.messageText = "Couldn't use \(item.title)"
-            alert.informativeText = "macOS didn't accept this shortcut. Pick a different one."
-            alert.runModal()
+    @objc func showSettings() {
+        if settingsWindow == nil {
+            let window = NSWindow(contentViewController: NSHostingController(rootView: SettingsView(model: settings)))
+            window.title = "HeptaFloat Settings"
+            window.styleMask = [.titled, .closable]
+            window.isReleasedWhenClosed = false
+            window.level = .floating // stay above the floating card
+            window.center()
+            settingsWindow = window
         }
-        refreshMenu()
+        settings.reload()
+        NSApp.activate(ignoringOtherApps: true)
+        settingsWindow?.makeKeyAndOrderFront(nil)
     }
 
-    @objc func toggleJournal() { journal.toggle() }
+    @objc func showJournal() { journal.show() }
     @objc func hideJournal() { journal.hide() }
-    @objc func togglePinned() { journal.togglePinned(); refreshMenu() }
+    @objc func togglePinned() { journal.togglePinned() }
     @objc func openInHeptabase() { journal.openInHeptabase() }
     @objc func biggerText() { journal.adjustFont(by: 0.1) }
     @objc func smallerText() { journal.adjustFont(by: -0.1) }
     @objc func resetText() { journal.adjustFont(by: nil) }
+    @objc func openGitHub() { NSWorkspace.shared.open(URL(string: "https://github.com/madeyexz/heptafloat")!) }
+    @objc func reportIssue() { NSWorkspace.shared.open(URL(string: "https://github.com/madeyexz/heptafloat/issues/new")!) }
+
+    /// ⌘W closes Settings when it's in front, otherwise hides the card.
+    @objc func closeWindow() {
+        if let key = NSApp.keyWindow, key !== journal.panel { key.performClose(nil) } else { journal.hide() }
+    }
+
+    /// Undo/redo go to the editor's own history when the card is in front.
+    @objc func undo(_ sender: Any?) {
+        if NSApp.keyWindow === journal.panel { journal.undo() } else { NSApp.sendAction(NSSelectorFromString("undo:"), to: nil, from: sender) }
+    }
+    @objc func redo(_ sender: Any?) {
+        if NSApp.keyWindow === journal.panel { journal.redo() } else { NSApp.sendAction(NSSelectorFromString("redo:"), to: nil, from: sender) }
+    }
 
     @objc func setAppearance(_ item: NSMenuItem) {
         guard let a = item.representedObject as? String, let appearance = Appearance(rawValue: a) else { return }
-        Settings.appearance = appearance
-        journal.applyAppearance()
-        refreshMenu()
-    }
-
-    @objc func toggleLaunchAtLogin() {
-        let service = SMAppService.mainApp
-        do {
-            if service.status == .enabled { try service.unregister() } else { try service.register() }
-        } catch {
-            let alert = NSAlert()
-            alert.messageText = "Couldn't change Launch at Login"
-            alert.informativeText = error.localizedDescription
-            alert.runModal()
-        }
-        refreshMenu()
+        settings.setAppearance(appearance)
     }
 
     // MARK: menus
 
-    private var pinItem: NSMenuItem?
-    private var loginItem: NSMenuItem?
-    private var appearanceItems: [NSMenuItem] = []
-    private var shortcutItems: [NSMenuItem] = []
-    private var toggleItem: NSMenuItem?
-
-    private func buildStatusItem() {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "note.text", accessibilityDescription: "HeptaFloat")
-        let menu = NSMenu()
-        menu.delegate = self
-        toggleItem = menu.addItem(withTitle: "Show / Hide Journal", action: #selector(toggleJournal), keyEquivalent: "")
-        toggleItem?.target = self
-        menu.addItem(.separator())
-        pinItem = menu.addItem(withTitle: "Keep on Top", action: #selector(togglePinned), keyEquivalent: "")
-        pinItem?.target = self
-        let appearance = NSMenuItem(title: "Appearance", action: nil, keyEquivalent: "")
-        let sub = NSMenu()
-        appearanceItems = Appearance.allCases.map { a in
-            let item = sub.addItem(withTitle: a.title, action: #selector(setAppearance(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = a.rawValue
-            return item
-        }
-        appearance.submenu = sub
-        menu.addItem(appearance)
-        let shortcut = NSMenuItem(title: "Shortcut", action: nil, keyEquivalent: "")
-        let shortcuts = NSMenu()
-        let specs = HotKey.presets.contains(Settings.hotkey) ? HotKey.presets : HotKey.presets + [Settings.hotkey]
-        shortcutItems = specs.compactMap { spec in
-            guard let parsed = HotKey.parse(spec) else { return nil }
-            let item = shortcuts.addItem(withTitle: parsed.display, action: #selector(setShortcut(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = spec
-            return item
-        }
-        shortcut.submenu = shortcuts
-        menu.addItem(shortcut)
-        menu.addItem(withTitle: "Open in Heptabase", action: #selector(openInHeptabase), keyEquivalent: "").target = self
-        loginItem = menu.addItem(withTitle: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
-        loginItem?.target = self
-        menu.addItem(.separator())
-        menu.addItem(withTitle: "Quit HeptaFloat", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        statusItem.menu = menu
-        refreshMenu()
-    }
-
-    func menuWillOpen(_ menu: NSMenu) { refreshMenu() }
-
     func refreshMenu() {
         pinItem?.state = Settings.pinned ? .on : .off
-        loginItem?.state = SMAppService.mainApp.status == .enabled ? .on : .off
         for item in appearanceItems { item.state = item.representedObject as? String == Settings.appearance.rawValue ? .on : .off }
-        for item in shortcutItems { item.state = item.representedObject as? String == Settings.hotkey ? .on : .off }
-        toggleItem?.title = "Show / Hide Journal" + (hotKey.map { "    \($0.display)" } ?? "")
+        showItem?.title = "Show Journal" + (hotKey.map { "  (\($0.display))" } ?? "")
     }
 
     private func buildMainMenu() {
         let main = NSMenu()
-        let appItem = NSMenuItem()
-        main.addItem(appItem)
-        let m = NSMenu()
-        m.addItem(withTitle: "Hide", action: #selector(hideJournal), keyEquivalent: "w").target = self
-        m.addItem(withTitle: "Quit HeptaFloat", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        appItem.submenu = m
+        func menu(_ title: String, _ build: (NSMenu) -> Void) -> NSMenu {
+            let item = NSMenuItem()
+            let m = NSMenu(title: title)
+            build(m)
+            item.submenu = m
+            main.addItem(item)
+            return m
+        }
+        func add(_ m: NSMenu, _ title: String, _ action: Selector, _ key: String = "", _ mods: NSEvent.ModifierFlags = [.command], target: AnyObject? = nil) -> NSMenuItem {
+            let item = m.addItem(withTitle: title, action: action, keyEquivalent: key)
+            item.keyEquivalentModifierMask = mods
+            item.target = target ?? self
+            return item
+        }
 
-        // Undo/redo are left to the editor's own keymap; only clipboard actions go through AppKit.
-        let editItem = NSMenuItem()
-        main.addItem(editItem)
-        let e = NSMenu(title: "Edit")
-        e.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
-        e.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
-        e.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
-        e.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
-        editItem.submenu = e
-
-        let viewItem = NSMenuItem()
-        main.addItem(viewItem)
-        let v = NSMenu(title: "View")
-        v.addItem(withTitle: "Keep on Top", action: #selector(togglePinned), keyEquivalent: "P").target = self
-        v.addItem(withTitle: "Open in Heptabase", action: #selector(openInHeptabase), keyEquivalent: "o").target = self
-        v.addItem(withTitle: "Bigger Text", action: #selector(biggerText), keyEquivalent: "=").target = self
-        v.addItem(withTitle: "Smaller Text", action: #selector(smallerText), keyEquivalent: "-").target = self
-        v.addItem(withTitle: "Actual Size", action: #selector(resetText), keyEquivalent: "0").target = self
-        viewItem.submenu = v
-
+        _ = menu("HeptaFloat") { m in
+            _ = add(m, "About HeptaFloat", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), target: NSApp)
+            m.addItem(.separator())
+            _ = add(m, "Settings…", #selector(showSettings), ",")
+            m.addItem(.separator())
+            _ = add(m, "Hide HeptaFloat", #selector(hideJournal), "h")
+            _ = add(m, "Quit HeptaFloat", #selector(NSApplication.terminate(_:)), "q", target: NSApp)
+        }
+        _ = menu("File") { m in
+            _ = add(m, "Open in Heptabase", #selector(openInHeptabase), "o")
+            m.addItem(.separator())
+            _ = add(m, "Close", #selector(closeWindow), "w")
+        }
+        _ = menu("Edit") { m in
+            _ = add(m, "Undo", #selector(undo(_:)), "z")
+            _ = add(m, "Redo", #selector(redo(_:)), "z", [.command, .shift])
+            m.addItem(.separator())
+            for (title, action, key) in [("Cut", #selector(NSText.cut(_:)), "x"), ("Copy", #selector(NSText.copy(_:)), "c"),
+                                         ("Paste", #selector(NSText.paste(_:)), "v"), ("Select All", #selector(NSText.selectAll(_:)), "a")] {
+                m.addItem(withTitle: title, action: action, keyEquivalent: key) // first responder
+            }
+        }
+        _ = menu("View") { m in
+            pinItem = add(m, "Keep on Top", #selector(togglePinned), "p", [.command, .shift])
+            let appearance = NSMenuItem(title: "Appearance", action: nil, keyEquivalent: "")
+            let sub = NSMenu()
+            appearanceItems = Appearance.allCases.map { a in
+                let item = add(sub, a.title, #selector(setAppearance(_:)))
+                item.representedObject = a.rawValue
+                return item
+            }
+            appearance.submenu = sub
+            m.addItem(appearance)
+            m.addItem(.separator())
+            _ = add(m, "Bigger Text", #selector(biggerText), "=")
+            _ = add(m, "Smaller Text", #selector(smallerText), "-")
+            _ = add(m, "Actual Size", #selector(resetText), "0")
+        }
+        let window = menu("Window") { m in
+            showItem = add(m, "Show Journal", #selector(showJournal))
+            m.addItem(.separator())
+        }
+        NSApp.windowsMenu = window
+        let help = menu("Help") { m in
+            _ = add(m, "HeptaFloat on GitHub", #selector(openGitHub))
+            _ = add(m, "Report a Problem…", #selector(reportIssue))
+        }
+        NSApp.helpMenu = help
         NSApp.mainMenu = main
+        refreshMenu()
     }
 }
 
 let app = NSApplication.shared
 let delegate = AppDelegate()
-app.setActivationPolicy(.accessory)
+app.setActivationPolicy(.regular)
 app.delegate = delegate
 app.run()

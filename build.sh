@@ -3,7 +3,7 @@
 # dist/HeptaFloat-<version>.zip for a GitHub release.
 set -e
 cd "$(dirname "$0")"
-VERSION=0.3.0
+VERSION=0.4.0
 APP=build/HeptaFloat.app
 
 rm -rf "$APP"
@@ -35,7 +35,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>CFBundleVersion</key><string>$VERSION</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
-  <key>LSUIElement</key><true/>
+  <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSHumanReadableCopyright</key><string>MIT License</string>
 </dict></plist>

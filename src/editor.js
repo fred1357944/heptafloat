@@ -270,6 +270,8 @@ window.hf = {
   setPinned(on) { document.body.classList.toggle('pinned', on); },
   shown() { view?.focus(); poll(); },
   async flush() { if (dirty) await save(); else if (saving) await saving; return true; },
+  undo() { if (view) { undo(view.state, view.dispatch); view.focus(); } },
+  redo() { if (view) { redo(view.state, view.dispatch); view.focus(); } },
   titles(map) {
     Object.assign(titles, map);
     for (const c of document.querySelectorAll('.chip[data-id]')) if (map[c.dataset.id]) c.textContent = map[c.dataset.id];
