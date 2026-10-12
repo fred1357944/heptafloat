@@ -155,6 +155,16 @@ enum Settings {
         get { Appearance(rawValue: defaults.string(forKey: "appearance") ?? "") ?? .system }
         set { defaults.set(newValue.rawValue, forKey: "appearance") }
     }
+    /// Off (default): no Dock icon or menu bar, like Raycast — opening HeptaFloat can never make
+    /// macOS switch desktops or leave full screen. On: Dock icon and menus.
+    static var showInDock: Bool {
+        get { defaults.object(forKey: "showInDock") as? Bool ?? false }
+        set { defaults.set(newValue, forKey: "showInDock") }
+    }
+    static func applyActivationPolicy() {
+        NSApp.setActivationPolicy(showInDock ? .regular : .accessory)
+    }
+
     static var fontScale: Double {
         get { defaults.object(forKey: "fontScale") as? Double ?? 1.0 }
         set { defaults.set(min(max(newValue, 0.7), 1.8), forKey: "fontScale") }
@@ -374,7 +384,7 @@ final class HotKey {
 /// Web view whose top strip drags the window, so the card can sit anywhere.
 final class DragWebView: WKWebView {
     static let dragStripHeight: CGFloat = 36
-    static let buttonsWidth: CGFloat = 100
+    static let buttonsWidth: CGFloat = 126
 
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
@@ -393,9 +403,10 @@ final class FloatPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 
-    /// While another app owns the menu bar, our menus don't see key equivalents; offer them first.
+    /// HeptaFloat's menus usually aren't on screen (no menu bar, or another app owns it), so the
+    /// card offers every key equivalent to them itself.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if !NSApp.isActive, NSApp.mainMenu?.performKeyEquivalent(with: event) == true { return true }
+        if NSApp.mainMenu?.performKeyEquivalent(with: event) == true { return true }
         return super.performKeyEquivalent(with: event)
     }
 }
@@ -624,6 +635,8 @@ final class JournalWindow: NSObject, WKScriptMessageHandler, WKNavigationDelegat
             if let s = body["url"] as? String, let url = URL(string: s) { NSWorkspace.shared.open(url) }
         case "hide":
             hide()
+        case "settings":
+            (NSApp.delegate as? AppDelegate)?.showSettings()
         case "togglePin":
             togglePinned()
         default: break
@@ -731,6 +744,7 @@ final class SettingsModel: ObservableObject {
     @Published var pinned = Settings.pinned
     @Published var fontScale = Settings.fontScale
     @Published var launchAtLogin = SMAppService.mainApp.status == .enabled
+    @Published var showInDock = Settings.showInDock
     @Published var loginProblem: String?
     @Published var connection = ConnectionStatus.checking
     @Published var shortcuts: [String: String] = [:]
@@ -791,6 +805,12 @@ final class SettingsModel: ObservableObject {
     func setAppearance(_ a: Appearance) { Settings.appearance = a; appearance = a; applyAppearance() }
     func setPinned(_ on: Bool) { Settings.pinned = on; pinned = on; applyPinned() }
     func setFontScale(_ v: Double) { Settings.fontScale = v; fontScale = Settings.fontScale; applyFontScale() }
+    func setShowInDock(_ on: Bool) {
+        Settings.showInDock = on
+        showInDock = on
+        Settings.applyActivationPolicy()
+        if !on { NSApp.activate(ignoringOtherApps: true) } // keep Settings in front after the switch
+    }
 
     func setLaunchAtLogin(_ on: Bool) {
         do {
@@ -892,6 +912,13 @@ struct GeneralSettings: View {
                 ShortcutRow(model: model, def: ShortcutDef.all[0])
                 Toggle("Keep on top of other windows", isOn: Binding(get: { model.pinned }, set: model.setPinned))
                 Toggle("Launch at login", isOn: Binding(get: { model.launchAtLogin }, set: model.setLaunchAtLogin))
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle("Show in Dock and menu bar", isOn: Binding(get: { model.showInDock }, set: model.setShowInDock))
+                    Text(model.showInDock
+                         ? "Opening HeptaFloat from a launcher may switch desktops or leave full screen."
+                         : "HeptaFloat stays out of the way, like Raycast: it pops up on whatever screen you're on and never switches desktops.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
                 if let problem = model.loginProblem {
                     Text(problem).font(.callout).foregroundStyle(.secondary)
                 }
@@ -945,6 +972,7 @@ struct GeneralSettings: View {
 
             Section {
                 LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev")
+                Button("Quit HeptaFloat") { NSApp.terminate(nil) }
                 Link("HeptaFloat on GitHub", destination: URL(string: "https://github.com/madeyexz/heptafloat")!)
             }
         }
@@ -1264,6 +1292,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
 let app = NSApplication.shared
 let delegate = AppDelegate()
-app.setActivationPolicy(.regular)
+Settings.applyActivationPolicy()
 app.delegate = delegate
 app.run()

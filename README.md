@@ -89,7 +89,7 @@ You can also type Markdown: `- ` bullets, `1. ` numbers, `[] ` to-dos, `# ` head
 
 ### Settings
 
-Open **HeptaFloat → Settings…** from the menu at the top-left of your screen, or press <kbd>⌘</kbd> <kbd>,</kbd> while the card is in front.
+Click the **⚙** button at the top of the card, or press <kbd>⌘</kbd> <kbd>,</kbd> while the card is in front.
 
 <p align="center"><img src="docs/screenshot-settings.png" width="420" alt="HeptaFloat Settings: shortcut, keep on top, launch at login, theme, text size, Heptabase connection"></p>
 
@@ -102,7 +102,8 @@ Open **HeptaFloat → Settings…** from the menu at the top-left of your screen
 
 <p align="center"><img src="docs/screenshot-shortcuts.png" width="420" alt="Settings → Shortcuts"></p>
 
-The menus at the top of the screen have the rest: **File** (search, recent, today, open in Heptabase), **Format** (bold, highlight, headings…), **View** (keep on top, appearance, text size), **Window**, and **Help** — each showing its current shortcut.
+- **Show in Dock and menu bar** — off by default. HeptaFloat then works like Raycast: no Dock icon, and the card pops up on whatever screen you're on — over full-screen apps too — without ever switching desktops. Turn it on to get a Dock icon and the menus at the top of the screen (File, Format, View, Window, Help), at the cost that opening HeptaFloat from a launcher can switch desktops.
+- **Quit HeptaFloat** is at the bottom of Settings (or press <kbd>⌘</kbd> <kbd>Q</kbd> while the card is in front).
 
 > Using Raycast or another launcher? A launcher hotkey that opens HeptaFloat works too — press it again to hide. Just don't give the launcher and HeptaFloat's own shortcut the same keys.
 
