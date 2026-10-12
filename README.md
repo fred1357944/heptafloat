@@ -107,6 +107,19 @@ Press <kbd>⌘</kbd> <kbd>,</kbd> while the card is in front.
 
 > Using Raycast or another launcher? A launcher hotkey that opens HeptaFloat works too — press it again to hide. Just don't give the launcher and HeptaFloat's own shortcut the same keys.
 
+## How it works
+
+```mermaid
+flowchart LR
+  K["Your shortcut<br/>(⌃⌥J by default)"] --> C["HeptaFloat card<br/>floats over any screen"]
+  C <-->|"saves as you type · checks for changes every 3s · ⌘O search"| CLI["Heptabase CLI"]
+  CLI <--> H["Heptabase app<br/>(must be running)"]
+  H <--> S["Heptabase sync<br/>your other devices"]
+  C -.->|"⌘P"| R[("Recent cards<br/>kept on your Mac")]
+```
+
+HeptaFloat never stores your notes or talks to the internet itself. It reads and saves through the Heptabase app on your Mac (via Heptabase's CLI), and Heptabase syncs as usual. The only thing HeptaFloat keeps is the ⌘P list of cards you've opened.
+
 ## Privacy
 
 HeptaFloat runs entirely on your Mac. It reads and saves your journal through the Heptabase app on your computer and never sends your notes anywhere else. No accounts, no analytics.
