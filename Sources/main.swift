@@ -387,9 +387,17 @@ final class DragWebView: WKWebView {
     }
 }
 
+/// A non-activating panel (like Raycast's or Spotlight's): it takes typing without making
+/// HeptaFloat the active app, so it can float over any space, including other apps' full screen.
 final class FloatPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+
+    /// While another app owns the menu bar, our menus don't see key equivalents; offer them first.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if !NSApp.isActive, NSApp.mainMenu?.performKeyEquivalent(with: event) == true { return true }
+        return super.performKeyEquivalent(with: event)
+    }
 }
 
 final class JournalWindow: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NSWindowDelegate {
@@ -398,7 +406,7 @@ final class JournalWindow: NSObject, WKScriptMessageHandler, WKNavigationDelegat
 
     override init() {
         panel = FloatPanel(contentRect: NSRect(x: 0, y: 0, width: 440, height: 580),
-                           styleMask: [.titled, .resizable, .fullSizeContentView, .closable],
+                           styleMask: [.titled, .resizable, .fullSizeContentView, .closable, .nonactivatingPanel],
                            backing: .buffered, defer: false)
         let config = WKWebViewConfiguration()
         web = DragWebView(frame: .zero, configuration: config)
@@ -460,28 +468,32 @@ final class JournalWindow: NSObject, WKScriptMessageHandler, WKNavigationDelegat
 
     // MARK: show / hide
 
-    var isShown: Bool { panel.isVisible && NSApp.isActive && panel.isKeyWindow }
+    var isShown: Bool { panel.isVisible && panel.isKeyWindow && !NSApp.isHidden }
 
     /// The app that was in front before the card appeared, to hand focus back to on hide.
     private var previousApp: NSRunningApplication?
 
+    /// Shows the card on the current space — over full-screen apps too — without activating
+    /// HeptaFloat, so the app you're in stays in front and keeps its full screen.
     func show() {
         if let front = NSWorkspace.shared.frontmostApplication, front != NSRunningApplication.current {
             previousApp = front
         }
-        NSApp.unhide(nil)
-        NSApp.activate(ignoringOtherApps: true)
-        panel.makeKeyAndOrderFront(nil)
+        if NSApp.isHidden { NSApp.unhideWithoutActivation() }
+        panel.orderFrontRegardless()
+        panel.makeKey()
+        panel.makeFirstResponder(web)
         web.evaluateJavaScript("window.hf && window.hf.shown()")
     }
 
     func flushSoon() { web.evaluateJavaScript("window.hf && window.hf.flush()") }
 
-    /// Hides and hands focus back to whatever app was in front, like Raycast.
+    /// Hides the card. If HeptaFloat had become the active app (Dock, ⌘-Tab), hand focus back
+    /// to the app you were in; otherwise that app never lost it.
     func hide() {
         flushSoon()
         panel.orderOut(nil)
-        returnFocus()
+        if NSApp.isActive { returnFocus() }
     }
 
     /// Steps aside for the app that was in front before the card appeared.
@@ -642,6 +654,14 @@ final class JournalWindow: NSObject, WKScriptMessageHandler, WKNavigationDelegat
             decisionHandler(.cancel)
         } else {
             decisionHandler(.allow)
+        }
+    }
+
+    /// Unpinned, the card tucks away once you click into another app.
+    func windowDidResignKey(_ notification: Notification) {
+        guard !Settings.pinned else { return }
+        DispatchQueue.main.async {
+            if NSApp.keyWindow == nil && self.panel.isVisible { self.flushSoon(); self.panel.orderOut(nil) }
         }
     }
 
@@ -1038,11 +1058,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
         if hotkeyJustFired {
             if !journal.panel.isVisible { journal.returnFocus() }
+        } else if journal.isShown && Date().timeIntervalSince(activatedAt) > 0.5 {
+            journal.hide() // the card was already up: a second launcher press hides it
         } else {
             journal.show()
         }
         return false
     }
+
+    /// When HeptaFloat last became the active app (a launcher, the Dock, ⌘-Tab).
+    private var activatedAt = Date.distantPast
+    func applicationWillBecomeActive(_ notification: Notification) { activatedAt = Date() }
 
     /// Hidden by anything (⌘H, a launcher): save first. If a launcher bound to the same keys
     /// hid us right after our hotkey showed the card, undo that.
