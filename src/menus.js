@@ -1,0 +1,311 @@
+// Heptabase-style editor menus: "/" commands, "@" / "[[" card mentions, a selection toolbar,
+// and empty-line placeholders.
+
+import { Plugin, PluginKey, TextSelection } from 'prosemirror-state';
+import { Decoration, DecorationSet } from 'prosemirror-view';
+import { toggleMark } from 'prosemirror-commands';
+import { insertBlock, turnInto } from './commands.js';
+import { formatDate, titles } from './schema.js';
+
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function todayISO() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// MARK: "/" and mention suggestions
+
+export const suggestKey = new PluginKey('suggest');
+
+const COMMANDS = [
+  { label: 'Text', icon: 'T', keys: 'text paragraph plain', run: (v) => turnInto(v, 'paragraph') },
+  { label: 'Heading 1', icon: 'H1', keys: 'h1 heading title', run: (v) => turnInto(v, 'heading', { level: 1 }) },
+  { label: 'Heading 2', icon: 'H2', keys: 'h2 heading subtitle', run: (v) => turnInto(v, 'heading', { level: 2 }) },
+  { label: 'Heading 3', icon: 'H3', keys: 'h3 heading', run: (v) => turnInto(v, 'heading', { level: 3 }) },
+  { label: 'To-do list', icon: '☐', keys: 'todo task checkbox check []', run: (v) => turnInto(v, 'todo_list_item') },
+  { label: 'Bulleted list', icon: '•', keys: 'bullet list ul unordered -', run: (v) => turnInto(v, 'bullet_list_item') },
+  { label: 'Numbered list', icon: '1.', keys: 'numbered ordered list ol', run: (v) => turnInto(v, 'numbered_list_item') },
+  { label: 'Toggle list', icon: '▸', keys: 'toggle fold collapse', run: (v) => turnInto(v, 'toggle_list_item') },
+  { label: 'Quote', icon: '❝', keys: 'quote blockquote', run: (v) => turnInto(v, 'blockquote') },
+  { label: 'Code block', icon: '</>', keys: 'code pre snippet', run: (v) => turnInto(v, 'code_block', { params: '' }) },
+  { label: 'Divider', icon: '—', keys: 'divider hr line separator', run: (v) => insertBlock(v, 'horizontal_rule') },
+  { label: 'Today', icon: '📅', keys: 'date today now', run: (v) => insertInline(v, v.state.schema.nodes.date.create({ date: todayISO() })) },
+  { label: 'Mention a card', icon: '@', keys: 'mention card link page', run: (v) => startMention(v) },
+];
+
+function insertInline(view, node) {
+  view.dispatch(view.state.tr.replaceSelectionWith(node, false).insertText(' ').scrollIntoView());
+}
+
+function startMention(view) {
+  const { from } = view.state.selection;
+  view.dispatch(view.state.tr.insertText('@').setMeta(suggestKey, { kind: 'mention', from, trigger: '@' }));
+}
+
+function mentionNode(schema, r) {
+  const n = schema.nodes;
+  titles[r.id] = r.title;
+  switch (r.objectType) {
+    case 'journal': return n.date.create({ date: r.id });
+    case 'pdf': case 'pdfCard': return n.pdf_card.create({ pdfCardId: r.id });
+    case 'highlightElement': return n.highlight_element.create({ highlightElementId: r.id });
+    case 'image': return n.image_card.create({ cardId: r.id });
+    case 'video': return n.video_card.create({ cardId: r.id });
+    case 'audio': return n.audio_card.create({ cardId: r.id });
+    default: return n.card.create({ cardId: r.id });
+  }
+}
+
+const TYPE_ICON = { journal: '📅', pdf: '📄', highlightElement: '✎', image: '🖼', video: '▶', audio: '♪', web: '🌐' };
+
+/** `search(query)` resolves to [{ id, objectType, title }]. */
+export function suggestPlugin(search) {
+  return new Plugin({
+    key: suggestKey,
+    state: {
+      init: () => null,
+      apply(tr, prev, _old, state) {
+        const meta = tr.getMeta(suggestKey);
+        if (meta !== undefined) return meta;
+        if (!prev) return null;
+        const from = tr.mapping.map(prev.from);
+        const { empty, $head, head } = state.selection;
+        if (!empty || head < from + prev.trigger.length || state.doc.resolve(from).parent !== $head.parent) return null;
+        const text = state.doc.textBetween(from, head, '\n', '￼');
+        if (!text.startsWith(prev.trigger)) return null;
+        const query = text.slice(prev.trigger.length);
+        if (query.length > 40 || /[\n￼]/.test(query) || (prev.kind === 'command' ? /\s/.test(query) : /\s\s/.test(query))) return null;
+        return { ...prev, from, query };
+      },
+    },
+    props: {
+      handleTextInput(view, from, to, text) {
+        const $from = view.state.doc.resolve(from);
+        if ($from.parent.type.spec.code) return false;
+        const before = $from.parent.textBetween(Math.max(0, $from.parentOffset - 1), $from.parentOffset, '\n', '￼');
+        const atWordStart = before === '' || /\s/.test(before);
+        let meta = null;
+        if (text === '/' && atWordStart) meta = { kind: 'command', from, trigger: '/' };
+        else if (text === '@' && atWordStart) meta = { kind: 'mention', from, trigger: '@' };
+        else if (text === '[' && before === '[') meta = { kind: 'mention', from: from - 1, trigger: '[[' };
+        if (!meta) return false;
+        view.dispatch(view.state.tr.insertText(text, from, to).setMeta(suggestKey, { ...meta, query: '' }));
+        return true;
+      },
+      handleKeyDown(view, event) {
+        return menu.active ? menu.key(view, event) : false;
+      },
+    },
+    view: (view) => {
+      menu.search = search;
+      return { update: (v) => menu.update(v), destroy: () => menu.hide() };
+    },
+  });
+}
+
+const menu = {
+  el: null, items: [], index: 0, active: null, seq: 0, timer: null, search: null, lastKey: null,
+
+  ensure() {
+    if (this.el) return this.el;
+    this.el = document.createElement('div');
+    this.el.className = 'popup suggest';
+    this.el.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      const row = e.target.closest('[data-i]');
+      if (row) this.choose(this.view, Number(row.dataset.i));
+    });
+    document.body.append(this.el);
+    return this.el;
+  },
+
+  update(view) {
+    this.view = view;
+    const s = suggestKey.getState(view.state);
+    this.active = s;
+    if (!s) return this.hide();
+    const key = `${s.kind}:${s.from}:${s.query}`;
+    if (key === this.lastKey) return this.place(view, s);
+    this.lastKey = key;
+    if (s.kind === 'command') {
+      const q = s.query.toLowerCase();
+      this.setItems(COMMANDS.filter((c) => !q || c.label.toLowerCase().includes(q) || c.keys.includes(q)));
+    } else {
+      this.setItems(null, 'Searching…');
+      clearTimeout(this.timer);
+      const seq = ++this.seq;
+      this.timer = setTimeout(async () => {
+        const results = await this.search(s.query);
+        if (seq !== this.seq || !this.active) return;
+        this.setItems(results.map((r) => ({
+          label: r.objectType === 'journal' ? formatDate(r.id) : r.title || 'Untitled',
+          icon: TYPE_ICON[r.objectType] || '▤',
+          run: (v) => insertInline(v, mentionNode(v.state.schema, r)),
+        })), s.query ? 'No cards found' : 'No recent cards');
+      }, s.query ? 140 : 0);
+    }
+    this.place(view, s);
+  },
+
+  setItems(items, emptyText = 'No results') {
+    this.items = items || [];
+    this.index = 0;
+    const el = this.ensure();
+    el.innerHTML = this.items.length
+      ? this.items.map((it, i) => `<div class="row${i === 0 ? ' sel' : ''}" data-i="${i}"><span class="ic">${esc(it.icon)}</span><span class="lb">${esc(it.label)}</span></div>`).join('')
+      : `<div class="empty">${esc(emptyText)}</div>`;
+    el.style.display = 'block';
+    // Results change the menu's height, so re-fit it above or below the caret.
+    if (this.active && this.view) this.place(this.view, this.active);
+  },
+
+  place(view, s) {
+    const el = this.ensure();
+    const c = view.coordsAtPos(s.from);
+    const h = el.offsetHeight, w = el.offsetWidth;
+    const below = c.bottom + 6 + h < window.innerHeight - 8;
+    el.style.top = `${below ? c.bottom + 6 : Math.max(8, c.top - 6 - h)}px`;
+    el.style.left = `${Math.max(8, Math.min(c.left - 4, window.innerWidth - w - 8))}px`;
+  },
+
+  highlight(i) {
+    if (!this.items.length) return;
+    this.index = (i + this.items.length) % this.items.length;
+    this.el.querySelectorAll('.row').forEach((r, j) => r.classList.toggle('sel', j === this.index));
+    this.el.querySelector('.row.sel')?.scrollIntoView({ block: 'nearest' });
+  },
+
+  key(view, e) {
+    if (e.key === 'ArrowDown' || (e.ctrlKey && e.key === 'n')) { this.highlight(this.index + 1); return true; }
+    if (e.key === 'ArrowUp' || (e.ctrlKey && e.key === 'p')) { this.highlight(this.index - 1); return true; }
+    if (e.key === 'Enter' || e.key === 'Tab') {
+      if (!this.items.length) return false;
+      this.choose(view, this.index);
+      return true;
+    }
+    if (e.key === 'Escape') { view.dispatch(view.state.tr.setMeta(suggestKey, null)); return true; }
+    return false;
+  },
+
+  choose(view, i) {
+    const s = suggestKey.getState(view.state), item = this.items[i];
+    if (!s || !item) return;
+    const tr = view.state.tr.delete(s.from, view.state.selection.head).setMeta(suggestKey, null);
+    view.dispatch(tr);
+    item.run(view);
+    view.focus();
+  },
+
+  hide() {
+    this.active = null;
+    this.lastKey = null;
+    if (this.el) this.el.style.display = 'none';
+  },
+};
+
+// MARK: selection toolbar
+
+export function toolbarPlugin(onOpenLink) {
+  let el = null, linkMode = false, render = () => {};
+  const buttons = [
+    ['strong', '<b>B</b>', 'Bold ⌘B'], ['em', '<i>I</i>', 'Italic ⌘I'], ['underline', '<u>U</u>', 'Underline ⌘U'],
+    ['strike', '<s>S</s>', 'Strikethrough ⌘⇧X'], ['code', '&lt;/&gt;', 'Code ⌘E'], ['link', '🔗', 'Link ⌘K'],
+  ];
+  const isActive = (state, type) => {
+    const { from, to, empty, $from } = state.selection;
+    return empty ? !!type.isInSet(state.storedMarks || $from.marks()) : state.doc.rangeHasMark(from, to, type);
+  };
+  return new Plugin({
+    view(view) {
+      el = document.createElement('div');
+      el.className = 'popup toolbar';
+      el.addEventListener('mousedown', (e) => {
+        if (e.target.tagName === 'INPUT') return;
+        e.preventDefault();
+        const b = e.target.closest('[data-mark]');
+        if (!b) return;
+        const type = view.state.schema.marks[b.dataset.mark];
+        if (b.dataset.mark === 'link') {
+          if (isActive(view.state, type)) view.dispatch(view.state.tr.removeMark(view.state.selection.from, view.state.selection.to, type));
+          else { linkMode = true; render(view); }
+          return;
+        }
+        toggleMark(type)(view.state, view.dispatch);
+      });
+      document.body.append(el);
+
+      render = (v) => {
+        const { state } = v;
+        const sel = state.selection;
+        const show = v.hasFocus() || linkMode;
+        if (sel.empty || !(sel instanceof TextSelection) || !show || suggestKey.getState(state)) {
+          el.style.display = 'none';
+          linkMode = false;
+          return;
+        }
+        if (linkMode) {
+          el.innerHTML = '<input class="link-input" placeholder="Paste a link and press Enter">';
+          const input = el.querySelector('input');
+          input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && input.value.trim()) {
+              const href = /^[a-z][a-z0-9+.-]*:/i.test(input.value.trim()) ? input.value.trim() : `https://${input.value.trim()}`;
+              const { from, to } = v.state.selection;
+              linkMode = false;
+              v.dispatch(v.state.tr.addMark(from, to, v.state.schema.marks.link.create({ href, title: null, 'data-internal-href': null, edited: false })));
+              v.focus();
+            } else if (e.key === 'Escape') { linkMode = false; v.focus(); render(v); }
+          });
+          setTimeout(() => input.focus());
+        } else {
+          el.innerHTML = buttons.filter(([m]) => state.schema.marks[m])
+            .map(([m, html, title]) => `<button data-mark="${m}" title="${title}" class="${isActive(state, state.schema.marks[m]) ? 'on' : ''}">${html}</button>`).join('');
+        }
+        el.style.display = 'flex';
+        const a = v.coordsAtPos(sel.from), b = v.coordsAtPos(sel.to);
+        const w = el.offsetWidth, h = el.offsetHeight;
+        const mid = (Math.min(a.left, b.left) + Math.max(a.right, b.right)) / 2;
+        el.style.left = `${Math.max(8, Math.min(mid - w / 2, window.innerWidth - w - 8))}px`;
+        el.style.top = `${a.top - h - 8 > 30 ? a.top - h - 8 : b.bottom + 8}px`;
+      };
+      view.dom.addEventListener('blur', () => setTimeout(() => render(view), 0));
+      view.dom.addEventListener('mousedown', () => { el.style.display = 'none'; });
+      view.dom.addEventListener('mouseup', () => setTimeout(() => render(view), 0));
+      return { update: (v, prev) => { if (!linkMode && !(prev && v.state.selection.eq(prev.selection) && v.state.doc.eq(prev.doc))) render(v); }, destroy: () => el.remove() };
+    },
+    props: {
+      handleKeyDown(view, e) {
+        if (e.metaKey && e.key === 'k' && !view.state.selection.empty) {
+          linkMode = true;
+          render(view);
+          return true;
+        }
+        return false;
+      },
+      handleClickOn(view, _pos, _node, _nodePos, event) {
+        const a = event.target.closest('a[href]');
+        if (a && event.metaKey) { onOpenLink(a.href); return true; }
+        return false;
+      },
+    },
+  });
+}
+
+// MARK: placeholders
+
+export function placeholderPlugin() {
+  return new Plugin({
+    props: {
+      decorations(state) {
+        const { doc, selection } = state;
+        if (doc.childCount === 1 && doc.firstChild.isTextblock && doc.firstChild.content.size === 0) {
+          return DecorationSet.create(doc, [Decoration.node(0, doc.firstChild.nodeSize, { class: 'ph', 'data-ph': 'Write something, or press / for commands…' })]);
+        }
+        const { $from, empty } = selection;
+        if (!empty || $from.parent.content.size > 0 || !$from.parent.isTextblock) return null;
+        const label = $from.depth > 1 && $from.node(-1).type.name.endsWith('_list_item') ? 'List' : $from.parent.type.name === 'heading' ? `Heading ${$from.parent.attrs.level || 1}` : "Type '/' for commands";
+        return DecorationSet.create(doc, [Decoration.node($from.before(), $from.after(), { class: 'ph line', 'data-ph': label })]);
+      },
+    },
+  });
+}

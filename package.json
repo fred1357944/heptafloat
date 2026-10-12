@@ -1,0 +1,19 @@
+{
+  "name": "heptafloat",
+  "private": true,
+  "description": "Today's Heptabase journal in a floating, editable card for macOS.",
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "prosemirror-commands": "^1.7.1",
+    "prosemirror-dropcursor": "^1.8.2",
+    "prosemirror-gapcursor": "^1.4.1",
+    "prosemirror-history": "^1.5.0",
+    "prosemirror-inputrules": "^1.5.1",
+    "prosemirror-keymap": "^1.2.3",
+    "prosemirror-model": "^1.25.4",
+    "prosemirror-schema-list": "^1.5.1",
+    "prosemirror-state": "^1.4.4",
+    "prosemirror-view": "^1.41.3"
+  }
+}

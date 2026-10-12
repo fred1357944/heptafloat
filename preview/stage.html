@@ -1,0 +1,41 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>HeptaFloat preview</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; font-family: -apple-system, sans-serif; }
+  body { background: radial-gradient(120% 90% at 15% 10%, #f6c7a6 0%, transparent 55%),
+                     radial-gradient(90% 80% at 90% 20%, #b7c8ff 0%, transparent 60%),
+                     radial-gradient(100% 90% at 60% 100%, #8fb3d9 0%, transparent 60%), #dfe3ec; }
+  body.dark { background: radial-gradient(120% 90% at 15% 10%, #4b2a52 0%, transparent 55%),
+                          radial-gradient(90% 80% at 90% 20%, #1d3a6b 0%, transparent 60%),
+                          radial-gradient(100% 90% at 60% 100%, #0f4d5c 0%, transparent 60%), #14161c; }
+  /* a generic app window behind, to show the card floating on top */
+  .app { position: absolute; left: 70px; top: 60px; right: 300px; bottom: 70px; border-radius: 12px; background: rgba(255,255,255,.72);
+    box-shadow: 0 0 0 1px rgba(0,0,0,.08), 0 20px 60px rgba(0,0,0,.18); overflow: hidden; }
+  .dark .app { background: rgba(30,32,36,.78); box-shadow: 0 0 0 1px rgba(255,255,255,.08), 0 20px 60px rgba(0,0,0,.5); }
+  .app .bar { height: 44px; display: flex; align-items: center; gap: 8px; padding: 0 16px; border-bottom: 1px solid rgba(0,0,0,.06); }
+  .dark .app .bar { border-color: rgba(255,255,255,.06); }
+  .app .bar i { width: 12px; height: 12px; border-radius: 50%; background: #ff5f57; } .app .bar i:nth-child(2) { background: #febc2e; } .app .bar i:nth-child(3) { background: #28c840; }
+  .app .line { height: 12px; border-radius: 6px; background: rgba(0,0,0,.07); margin: 22px 40px 0; }
+  .dark .app .line { background: rgba(255,255,255,.06); }
+  .card { position: absolute; right: 90px; top: 110px; width: 440px; height: 580px; border-radius: 12px; overflow: hidden;
+    -webkit-backdrop-filter: blur(30px) saturate(1.6); backdrop-filter: blur(30px) saturate(1.6);
+    box-shadow: 0 0 0 1px rgba(0,0,0,.12), 0 24px 70px rgba(0,0,0,.28); }
+  .dark .card { box-shadow: 0 0 0 1px rgba(255,255,255,.1), 0 24px 70px rgba(0,0,0,.6); }
+  .card iframe { width: 100%; height: 100%; border: 0; display: block; background: transparent; }
+</style>
+</head>
+<body>
+<div class="app"><div class="bar"><i></i><i></i><i></i></div>
+  <div class="line" style="width:40%"></div><div class="line" style="width:70%"></div><div class="line" style="width:60%"></div>
+  <div class="line" style="width:75%"></div><div class="line" style="width:50%"></div><div class="line" style="width:65%"></div>
+  <div class="line" style="width:30%"></div><div class="line" style="width:72%"></div><div class="line" style="width:58%"></div>
+</div>
+<div class="card"><iframe id="card" src="card.html" allowtransparency="true"></iframe></div>
+<script>
+  if (matchMedia('(prefers-color-scheme: dark)').matches) document.body.classList.add('dark');
+</script>
+</body>
+</html>
