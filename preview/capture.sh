@@ -47,5 +47,12 @@ $AB record stop >/dev/null
 CROP="crop=1400:1420:1000:40"
 ffmpeg -v error -y -i "$TMP/demo.webm" -vf "$CROP,fps=12,scale=700:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=160:stats_mode=diff[p];[b][p]paletteuse=dither=sierra2_4a:diff_mode=rectangle" "$D/demo.gif"
 ffmpeg -v error -y -i "$TMP/demo.webm" -vf "$CROP,scale=1000:-2" -c:v libx264 -pix_fmt yuv420p -crf 23 -movflags +faststart "$D/demo.mp4"
+# GitHub social preview (1280×640; upload in repo Settings → Social preview)
+$AB set viewport 1280 640 2 >/dev/null; $AB set media dark >/dev/null
+$AB open http://localhost:8765/social.html >/dev/null; sleep 2.5
+$AB eval '(() => { const w = document.getElementById("card").contentWindow; w.document.activeElement.blur(); w.document.getElementById("main").scrollTop = 0; })()' >/dev/null; sleep 0.4
+$AB screenshot "$TMP/social.png" >/dev/null
+python3 -c "from PIL import Image; Image.open('$TMP/social.png').convert('RGB').resize((1280, 640), Image.LANCZOS).save('$D/social-preview.png', optimize=True)"
+
 $AB close >/dev/null 2>&1 || true
 echo "Updated $(ls "$D" | tr '\n' ' ')"
