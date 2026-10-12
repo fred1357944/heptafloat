@@ -62,7 +62,16 @@ const BASE_NODES = {
   audio: blockAtom(['id', 'url', 'fileId', 'reference'], mediaChip('♪', 'Audio')),
   file: blockAtom(['id', 'fileId', 'url', 'reference'], mediaChip('📎', 'File')),
   bookmark: blockAtom(['id', 'url', 'title', 'description', 'thumbnailUrl', 'faviconUrl', 'siteName', 'lastUpdatedTime'],
-    (n) => ['a', { class: 'block-chip', href: n.attrs.url }, n.attrs.title || n.attrs.url]),
+    (n) => {
+      const { url, title, description, thumbnailUrl, faviconUrl, siteName } = n.attrs;
+      let host = siteName;
+      try { host ||= new URL(url).hostname.replace(/^www\./, ''); } catch { host ||= url; }
+      const text = ['div', { class: 'bm-text' }, ['div', { class: 'bm-title' }, title || url]];
+      if (description) text.push(['div', { class: 'bm-desc' }, description]);
+      text.push(['div', { class: 'bm-site' }, ...(faviconUrl ? [['img', { src: faviconUrl, alt: '' }]] : []), host || '']);
+      return ['a', { class: 'bookmark', href: url, contenteditable: 'false' }, text,
+        ...(thumbnailUrl ? [['img', { class: 'bm-thumb', src: thumbnailUrl, alt: '' }]] : [])];
+    }),
   embed: blockAtom(['id', 'objectType', 'objectId', 'originalWidth', 'originalHeight', 'width', 'alignment'],
     (n) => ['div', { class: 'block-chip' }, chip('card', titles[n.attrs.objectId] || (n.attrs.objectType === 'journal' ? formatDate(n.attrs.objectId) : n.attrs.objectType), n.attrs.objectId)]),
   mention: blockAtom(['id', 'objectType', 'objectId'],
@@ -92,7 +101,8 @@ const BASE_MARKS = {
   underline: { toDOM: () => ['u', 0] },
   strike: { toDOM: () => ['s', 0] },
   code: { toDOM: () => ['code', 0] },
-  color: { attrs: attrs(['type', 'color']),
+  // Text color and highlight are both `color` marks (type "text" / "background"), so they can stack.
+  color: { attrs: attrs(['type', 'color']), excludes: '',
     toDOM: (m) => ['span', { class: `c-${m.attrs.type || 'text'}-${m.attrs.color}` }, 0] },
 };
 

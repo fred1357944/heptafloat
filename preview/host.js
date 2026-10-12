@@ -15,7 +15,10 @@
   let content = null, md5 = 'demo-0', saves = 0;
   const title = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   const postMessage = async (m) => {
-    if (!content) content = await (await fetch('demo-journal.json')).text();
+    if (!content) {
+      const d = new Date(), iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      content = (await (await fetch('demo-journal.json')).text()).replaceAll('__TODAY__', iso);
+    }
     const reply = (r) => setTimeout(() => window.hf.reply(m.requestId, r), 15);
     switch (m.action) {
       case 'read':

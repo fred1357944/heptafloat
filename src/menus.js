@@ -206,8 +206,40 @@ const menu = {
 
 // MARK: selection toolbar
 
+const COLORS = ['gray', 'brown', 'orange', 'yellow', 'green', 'blue', 'purple', 'pink', 'red'];
+
+/** Sets the text color or highlight (type "text" / "background") on the selection; null clears it. */
+export function setColor(state, dispatch, type, color) {
+  const markType = state.schema.marks.color;
+  const { from, to, empty } = state.selection;
+  if (!markType || empty) return false;
+  if (dispatch) {
+    const tr = state.tr;
+    state.doc.nodesBetween(from, to, (node, pos) => {
+      for (const m of node.marks) {
+        if (m.type === markType && (m.attrs.type || 'text') === type) tr.removeMark(Math.max(from, pos), Math.min(to, pos + node.nodeSize), m);
+      }
+    });
+    if (color) tr.addMark(from, to, markType.create({ type, color }));
+    dispatch(tr);
+  }
+  return true;
+}
+
+/** ⌘⇧H: yellow highlight on, or off if the selection is already highlighted. */
+export function toggleHighlight(state, dispatch) {
+  const markType = state.schema.marks.color;
+  const { from, to, empty } = state.selection;
+  if (!markType || empty) return false;
+  let highlighted = false;
+  state.doc.nodesBetween(from, to, (node) => {
+    if (node.marks.some((m) => m.type === markType && m.attrs.type === 'background')) highlighted = true;
+  });
+  return setColor(state, dispatch, 'background', highlighted ? null : 'yellow');
+}
+
 export function toolbarPlugin(onOpenLink) {
-  let el = null, linkMode = false, render = () => {};
+  let el = null, mode = null, render = () => {}; // mode: null | 'link' | 'color'
   const buttons = [
     ['strong', '<b>B</b>', 'Bold ⌘B'], ['em', '<i>I</i>', 'Italic ⌘I'], ['underline', '<u>U</u>', 'Underline ⌘U'],
     ['strike', '<s>S</s>', 'Strikethrough ⌘⇧X'], ['code', '&lt;/&gt;', 'Code ⌘E'], ['link', '🔗', 'Link ⌘K'],
@@ -216,6 +248,9 @@ export function toolbarPlugin(onOpenLink) {
     const { from, to, empty, $from } = state.selection;
     return empty ? !!type.isInSet(state.storedMarks || $from.marks()) : state.doc.rangeHasMark(from, to, type);
   };
+  const swatches = (type) => [`<button class="sw none" data-color-type="${type}" data-color="" title="Default">${type === 'text' ? 'A' : '∅'}</button>`]
+    .concat(COLORS.map((c) => `<button class="sw ${type === 'text' ? `c-text-${c}` : `c-background-${c}`}" data-color-type="${type}" data-color="${c}" title="${c[0].toUpperCase()}${c.slice(1)}">${type === 'text' ? 'A' : ''}</button>`))
+    .join('');
   return new Plugin({
     view(view) {
       el = document.createElement('div');
@@ -223,12 +258,20 @@ export function toolbarPlugin(onOpenLink) {
       el.addEventListener('mousedown', (e) => {
         if (e.target.tagName === 'INPUT') return;
         e.preventDefault();
+        const sw = e.target.closest('[data-color-type]');
+        if (sw) {
+          mode = null;
+          setColor(view.state, view.dispatch, sw.dataset.colorType, sw.dataset.color || null);
+          render(view);
+          return;
+        }
+        if (e.target.closest('[data-action="color"]')) { mode = 'color'; render(view); return; }
         const b = e.target.closest('[data-mark]');
         if (!b) return;
         const type = view.state.schema.marks[b.dataset.mark];
         if (b.dataset.mark === 'link') {
           if (isActive(view.state, type)) view.dispatch(view.state.tr.removeMark(view.state.selection.from, view.state.selection.to, type));
-          else { linkMode = true; render(view); }
+          else { mode = 'link'; render(view); }
           return;
         }
         toggleMark(type)(view.state, view.dispatch);
@@ -238,30 +281,35 @@ export function toolbarPlugin(onOpenLink) {
       render = (v) => {
         const { state } = v;
         const sel = state.selection;
-        const show = v.hasFocus() || linkMode;
+        const show = v.hasFocus() || mode;
         if (sel.empty || !(sel instanceof TextSelection) || !show || suggestKey.getState(state)) {
           el.style.display = 'none';
-          linkMode = false;
+          mode = null;
           return;
         }
-        if (linkMode) {
+        el.classList.toggle('palette', mode === 'color');
+        if (mode === 'link') {
           el.innerHTML = '<input class="link-input" placeholder="Paste a link and press Enter">';
           const input = el.querySelector('input');
           input.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && input.value.trim()) {
               const href = /^[a-z][a-z0-9+.-]*:/i.test(input.value.trim()) ? input.value.trim() : `https://${input.value.trim()}`;
               const { from, to } = v.state.selection;
-              linkMode = false;
+              mode = null;
               v.dispatch(v.state.tr.addMark(from, to, v.state.schema.marks.link.create({ href, title: null, 'data-internal-href': null, edited: false })));
               v.focus();
-            } else if (e.key === 'Escape') { linkMode = false; v.focus(); render(v); }
+            } else if (e.key === 'Escape') { mode = null; v.focus(); render(v); }
           });
           setTimeout(() => input.focus());
+        } else if (mode === 'color') {
+          el.innerHTML = `<div><div class="pl-label">Text color</div><div class="sw-row">${swatches('text')}</div>`
+            + `<div class="pl-label">Highlight</div><div class="sw-row">${swatches('background')}</div></div>`;
         } else {
           el.innerHTML = buttons.filter(([m]) => state.schema.marks[m])
-            .map(([m, html, title]) => `<button data-mark="${m}" title="${title}" class="${isActive(state, state.schema.marks[m]) ? 'on' : ''}">${html}</button>`).join('');
+            .map(([m, html, title]) => `<button data-mark="${m}" title="${title}" class="${isActive(state, state.schema.marks[m]) ? 'on' : ''}">${html}</button>`).join('')
+            + (state.schema.marks.color ? '<button data-action="color" title="Highlight & color ⌘⇧H"><span class="hl">A</span></button>' : '');
         }
-        el.style.display = 'flex';
+        el.style.display = mode === 'color' ? 'block' : 'flex';
         const a = v.coordsAtPos(sel.from), b = v.coordsAtPos(sel.to);
         const w = el.offsetWidth, h = el.offsetHeight;
         const mid = (Math.min(a.left, b.left) + Math.max(a.right, b.right)) / 2;
@@ -269,17 +317,18 @@ export function toolbarPlugin(onOpenLink) {
         el.style.top = `${a.top - h - 8 > 30 ? a.top - h - 8 : b.bottom + 8}px`;
       };
       view.dom.addEventListener('blur', () => setTimeout(() => render(view), 0));
-      view.dom.addEventListener('mousedown', () => { el.style.display = 'none'; });
+      view.dom.addEventListener('mousedown', () => { el.style.display = 'none'; mode = null; });
       view.dom.addEventListener('mouseup', () => setTimeout(() => render(view), 0));
-      return { update: (v, prev) => { if (!linkMode && !(prev && v.state.selection.eq(prev.selection) && v.state.doc.eq(prev.doc))) render(v); }, destroy: () => el.remove() };
+      return { update: (v, prev) => { if (mode !== 'link' && !(prev && v.state.selection.eq(prev.selection) && v.state.doc.eq(prev.doc))) render(v); }, destroy: () => el.remove() };
     },
     props: {
       handleKeyDown(view, e) {
         if (e.metaKey && e.key === 'k' && !view.state.selection.empty) {
-          linkMode = true;
+          mode = 'link';
           render(view);
           return true;
         }
+        if (e.key === 'Escape' && mode) { mode = null; render(view); return true; }
         return false;
       },
       handleClickOn(view, _pos, _node, _nodePos, event) {

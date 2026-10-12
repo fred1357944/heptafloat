@@ -12,7 +12,7 @@ import { dropCursor } from 'prosemirror-dropcursor';
 import { gapCursor } from 'prosemirror-gapcursor';
 import { LIST_ITEMS, schemaFor, schemaCovers, serialize, titles } from './schema.js';
 import { backspaceAtItemStart, enterInItem, lift, setChecked, sink, toggleTodo } from './commands.js';
-import { placeholderPlugin, suggestPlugin, toolbarPlugin } from './menus.js';
+import { placeholderPlugin, suggestPlugin, toggleHighlight, toolbarPlugin } from './menus.js';
 
 const SAVE_DELAY = 600;
 const POLL_INTERVAL = 3000;
@@ -69,6 +69,7 @@ function buildPlugins(schema) {
       'Mod-b': toggleMark(m.strong), 'Mod-i': toggleMark(m.em), 'Mod-u': toggleMark(m.underline),
       'Mod-Shift-x': toggleMark(m.strike), 'Mod-e': toggleMark(m.code),
       'Mod-Enter': toggleTodo,
+      'Mod-Shift-h': toggleHighlight,
       'Mod-Alt-0': setBlockType(n.paragraph),
       'Mod-Alt-1': setBlockType(n.heading, { level: 1 }),
       'Mod-Alt-2': setBlockType(n.heading, { level: 2 }),
@@ -96,7 +97,10 @@ class ItemView {
     this.marker.contentEditable = 'false';
     this.contentDOM = document.createElement('div');
     this.contentDOM.className = 'bd';
-    this.dom.append(this.marker, this.contentDOM);
+    this.due = document.createElement('span');
+    this.due.className = 'due';
+    this.due.contentEditable = 'false';
+    this.dom.append(this.marker, this.contentDOM, this.due);
     this.marker.addEventListener('mousedown', (e) => {
       e.preventDefault();
       const pos = getPos(), cur = view.state.doc.nodeAt(pos);
@@ -110,11 +114,30 @@ class ItemView {
     if (this.node && node.type !== this.node.type) return false;
     this.node = node;
     const kind = node.type.name.replace('_list_item', '');
-    this.dom.className = `li ${kind}${node.attrs.checked ? ' done' : ''}${node.attrs.folded ? ' folded' : ''}${node.childCount > 1 ? ' parent' : ''}`;
+    const due = kind === 'todo' && node.attrs.dueDate ? dueLabel(node.attrs.dueDate) : null;
+    this.dom.className = `li ${kind}${node.attrs.checked ? ' done' : ''}${node.attrs.folded ? ' folded' : ''}${node.childCount > 1 ? ' parent' : ''}${due ? ' has-due' : ''}`;
     this.dom.dataset.format = node.attrs.format ?? 0;
+    this.due.textContent = due?.text ?? '';
+    this.due.classList.toggle('overdue', !!due?.overdue && !node.attrs.checked);
     return true;
   }
-  ignoreMutation(m) { return m.target === this.marker || this.marker.contains(m.target); }
+  ignoreMutation(m) { return [this.marker, this.due].some((d) => m.target === d || d.contains(m.target)); }
+}
+
+/** "Today", "Tomorrow", "Yesterday", or "Oct 14", the way Heptabase labels to-do due dates. */
+function dueLabel(iso) {
+  const [y, m, d] = iso.split('-').map(Number);
+  if (!y) return null;
+  const due = new Date(y, m - 1, d), now = new Date();
+  const days = Math.round((due - new Date(now.getFullYear(), now.getMonth(), now.getDate())) / 864e5);
+  const text = days === 0 ? 'Today' : days === 1 ? 'Tomorrow' : days === -1 ? 'Yesterday'
+    : due.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(y !== now.getFullYear() && { year: 'numeric' }) });
+  return { text, overdue: days < 0 };
+}
+
+/** Cursor at the end of the last line of text, rather than selecting a trailing embed or image. */
+function endOfText(doc) {
+  return Selection.findFrom(doc.resolve(doc.content.size), -1, true) ?? Selection.atEnd(doc);
 }
 
 // MARK: state
@@ -134,23 +157,41 @@ function today() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-function status(text, sticky = false) {
+/** Footer status. Errors stay until things work again; the full text is in the tooltip. */
+function status(text, { sticky = false, error = false } = {}) {
   const s = el('status');
   s.textContent = text;
+  s.title = text;
   s.classList.toggle('show', !!text);
+  s.classList.toggle('error', error);
   clearTimeout(status.t);
-  if (text && !sticky) status.t = setTimeout(() => s.classList.remove('show'), 1600);
+  if (text && !sticky && !error) status.t = setTimeout(() => s.classList.remove('show'), 1600);
+}
+function clearError() {
+  if (el('status').classList.contains('error')) status('');
 }
 
 function updateCount() {
-  const chars = view ? [...view.state.doc.textContent].length : 0;
+  const doc = view?.state.doc;
+  const chars = doc ? [...doc.textContent].length : 0;
   el('count').textContent = `${chars.toLocaleString()} characters`;
+  let open = 0;
+  doc?.descendants((n) => { if (n.type.name === 'todo_list_item' && !n.attrs.checked) open++; });
+  el('todocount').textContent = `${open} todo${open === 1 ? '' : 's'}`;
+  el('todos').classList.toggle('show', open > 0);
+}
+
+function setTitle(result) {
+  const [y, m, d] = (result.date || '').split('-').map(Number);
+  el('weekday').textContent = y ? new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'long' }) : '';
+  el('bigtitle').textContent = result.title || result.date;
+  el('title').textContent = result.title || result.date;
 }
 
 function load(result, { keepSelection } = {}) {
   date = result.date;
   baseMd5 = result.contentMd5;
-  el('title').textContent = result.title || date;
+  setTitle(result);
   let json;
   try { json = JSON.parse(result.content); } catch { json = { type: 'doc', content: [{ type: 'paragraph' }] }; }
   if (!json.content?.length) json.content = [{ type: 'paragraph' }];
@@ -176,6 +217,8 @@ function load(result, { keepSelection } = {}) {
       handleClickOn(_v, _pos, _node, _nodePos, event) {
         const chip = event.target.closest('.chip[data-id]');
         if (chip && chip.dataset.id) { openInHeptabase(chip.dataset.kind, chip.dataset.id); return true; }
+        const bookmark = event.target.closest('a.bookmark[href]');
+        if (bookmark) { post({ action: 'openURL', url: bookmark.href }); return true; }
         return false;
       },
     });
@@ -200,17 +243,18 @@ async function save() {
   const doc = view.state.doc;
   const content = JSON.stringify(serialize(doc));
   dirty = false;
-  status('Saving…', true);
+  status('Saving…', { sticky: true });
   saving = call('save', { date, content, md5: baseMd5 }).then((r) => {
     saving = null;
     if (!r.error) {
       baseMd5 = r.current.contentMd5;
       adoptIds(doc, r.current);
+      clearError();
       status('Saved');
     } else if (!r.current) {
       // Heptabase unreachable: keep the edit and try again.
       dirty = true;
-      status('Not saved — is Heptabase running?', true);
+      status(`Not saved — ${r.error}`, { error: true });
       saveTimer = setTimeout(save, 3000);
     } else if (r.current.contentMd5 !== baseMd5) {
       // Edited in Heptabase meanwhile. Take their version unless we've typed since.
@@ -219,7 +263,7 @@ async function save() {
       else { status('Changed in Heptabase — reloaded'); applyRemote(r.current); }
     } else {
       dirty = true;
-      status(`Not saved: ${r.error}`, true);
+      status(`Not saved — ${r.error}`, { error: true });
     }
   });
   return saving;
@@ -256,11 +300,12 @@ async function poll() {
   const want = today();
   if (dirty || saving || Date.now() - lastEdit < 1500) return;
   const r = await call('read', { date: want });
-  if (r.error) { status(r.error, true); return; }
+  if (r.error) { status(r.error, { error: true }); return; }
+  clearError();
   if (dirty || saving) return;
   if (want !== date) {
     applyRemote(r, { keepSelection: false });
-    view.dispatch(view.state.tr.setSelection(Selection.atEnd(view.state.doc)));
+    view.dispatch(view.state.tr.setSelection(endOfText(view.state.doc)));
   } else if (r.contentMd5 !== baseMd5) applyRemote(r);
 }
 
@@ -284,9 +329,14 @@ el('open').onclick = () => openInHeptabase('card', date);
 
 (async () => {
   const r = await call('read', { date: today() });
-  if (r.error) { status(r.error, true); el('main').innerHTML = `<div class="error">${r.error}</div>`; return; }
+  if (r.error) {
+    status(r.error, { error: true });
+    // Keep trying until Heptabase is reachable, then start normally.
+    setTimeout(() => location.reload(), POLL_INTERVAL * 2);
+    return;
+  }
   applyRemote(r, { keepSelection: false });
-  view.dispatch(view.state.tr.setSelection(Selection.atEnd(view.state.doc)));
+  view.dispatch(view.state.tr.setSelection(endOfText(view.state.doc)));
   view.focus();
   // Start at the end of the journal, ready to write; wait for Inter so the measurement holds.
   document.fonts.ready.then(() => view.dispatch(view.state.tr.scrollIntoView()));

@@ -29,7 +29,7 @@ Opening Heptabase, finding today's journal, and switching back breaks your flow.
 | | |
 |---|---|
 | <img src="docs/screenshot-light.png" alt="HeptaFloat in light mode floating over another window"> | <img src="docs/screenshot-dark.png" alt="HeptaFloat in dark mode"> |
-| **Floats above everything.** Put it anywhere on screen; it stays on top across desktops and full-screen apps. | **Looks like Heptabase.** Same fonts, colors, checkboxes and lists — in light and dark. |
+| **Floats above everything.** Put it anywhere on screen; it stays on top across desktops and full-screen apps. | **Looks like Heptabase.** Same font (Inter), colors, checkboxes, lists, link previews and highlights — in light and dark. |
 | <img src="docs/screenshot-commands.png" alt="The / command menu"> | <img src="docs/screenshot-mention.png" alt="Searching cards with @"> |
 | **Type `/` for blocks** — to-dos, headings, bullets, toggles, quotes, dividers, today's date. | **Type `@` to mention a card** from your Heptabase library. Click a mention to open it in Heptabase. |
 
@@ -52,7 +52,7 @@ Opening Heptabase, finding today's journal, and switching back breaks your flow.
 HeptaFloat talks to Heptabase through Heptabase's built-in **CLI** (its local connection for other apps).
 
 1. Make sure the **Heptabase desktop app** is installed and running.
-2. In Heptabase, open **Settings** and turn on the **CLI** (install/enable it). Heptabase may require an active subscription for this.
+2. In Heptabase, open **Settings → AI Features** and turn on the **CLI**. Heptabase may require an active subscription for this.
 3. That's it — open HeptaFloat and today's journal appears.
 
 To double-check, open **HeptaFloat → Settings…** (<kbd>⌘</kbd> <kbd>,</kbd>). The **Heptabase** section shows a green **Connected** when everything is set up, or tells you what's missing (Heptabase not running, CLI turned off, …).
@@ -66,7 +66,8 @@ To double-check, open **HeptaFloat → Settings…** (<kbd>⌘</kbd> <kbd>,</kbd
 | Drag the top edge | Move it; drag any edge to resize (it remembers) |
 | `/` | Insert a block: to-do, heading, list, toggle, quote, code, divider, date |
 | `@` or `[[` | Mention a card |
-| Select text | Bold, italic, underline, strikethrough, code, link |
+| Select text | Bold, italic, underline, strikethrough, code, link, **highlight & text color** |
+| <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>H</kbd> | Highlight the selection in yellow (press again to remove) |
 | <kbd>Tab</kbd> / <kbd>⇧</kbd> <kbd>Tab</kbd> | Indent / outdent a list item |
 | <kbd>⌘</kbd> <kbd>↩</kbd> | Tick or untick a to-do |
 | <kbd>⌘</kbd> <kbd>O</kbd> | Open today's journal in Heptabase |

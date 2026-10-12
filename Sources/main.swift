@@ -22,7 +22,7 @@ enum Heptabase {
     struct Failure: Error { let message: String }
 
     static func run(_ args: [String]) throws -> [String: Any] {
-        guard let cli = cliPath else { throw Failure(message: "heptabase CLI not found. Enable it in Heptabase → Settings.") }
+        guard let cli = cliPath else { throw Failure(message: "Heptabase's CLI is off — turn it on in Heptabase → Settings → AI Features.") }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: cli)
         p.arguments = args
@@ -34,12 +34,31 @@ enum Heptabase {
         let errData = err.fileHandleForReading.readDataToEndOfFile()
         p.waitUntilExit()
         let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-        if let e = obj?["error"] { throw Failure(message: "\(e)") }
+        // Errors come back as JSON on stdout or stderr: {"error": "..."}
+        let errObj = (try? JSONSerialization.jsonObject(with: errData)) as? [String: Any]
+        if let e = obj?["error"] ?? errObj?["error"] { throw Failure(message: friendly("\(e)")) }
         guard p.terminationStatus == 0, let obj else {
             let msg = String(data: errData.isEmpty ? data : errData, encoding: .utf8) ?? ""
-            throw Failure(message: msg.isEmpty ? "Heptabase isn't responding. Is the app running?" : msg)
+            throw Failure(message: friendly(msg))
         }
         return obj
+    }
+
+    /// Short, plain messages for the CLI's errors, which are written for developers.
+    static func friendly(_ raw: String) -> String {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = text.lowercased()
+        if text.isEmpty || lower.contains("cannot connect") || lower.contains("not running") || lower.contains("econnrefused") {
+            return "Can't reach Heptabase — open Heptabase to keep syncing."
+        }
+        if lower.contains("subscription") { return "Heptabase's CLI needs an active Heptabase subscription." }
+        if lower.contains("enable cli") || lower.contains("register cli") || lower.contains("runtime was not found") {
+            return "Heptabase's CLI is off — turn it on in Heptabase → Settings → AI Features."
+        }
+        if lower.contains("md5") || lower.contains("conflict") { return "Changed in Heptabase since the last save." }
+        // Otherwise keep the first sentence.
+        let first = text.split(whereSeparator: { ".\n".contains($0) }).first.map(String.init) ?? text
+        return first.count > 140 ? String(first.prefix(140)) + "…" : first
     }
 
     static func readJournal(_ date: String) throws -> [String: Any] {
@@ -500,7 +519,7 @@ extension Heptabase {
         }
         guard cliPath != nil else {
             return ConnectionStatus(level: .problem, title: "Heptabase CLI is off",
-                                    detail: "In Heptabase, open Settings and turn on the CLI, then check again.")
+                                    detail: "In Heptabase, open Settings → AI Features and turn on the CLI, then check again.")
         }
         guard isAppRunning else {
             return ConnectionStatus(level: .problem, title: "Heptabase isn't running",
