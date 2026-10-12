@@ -1,5 +1,6 @@
-// Floating journal editor. The Swift host exposes `hf` messages for reading, saving, and searching
-// through the Heptabase CLI; this file owns the editor, autosave, polling, and day rollover.
+// Floating card editor. The Swift host exposes `hf` messages for reading, saving, and searching
+// through the Heptabase CLI; this file owns the editor, autosave, polling, and which card is shown:
+// today's journal by default (rolling over at midnight), or any note/journal opened with ⌘O / ⌘P.
 
 import { Node } from 'prosemirror-model';
 import { EditorState, Plugin, Selection, TextSelection } from 'prosemirror-state';
@@ -10,9 +11,10 @@ import { baseKeymap, toggleMark, setBlockType } from 'prosemirror-commands';
 import { inputRules, wrappingInputRule, textblockTypeInputRule, InputRule } from 'prosemirror-inputrules';
 import { dropCursor } from 'prosemirror-dropcursor';
 import { gapCursor } from 'prosemirror-gapcursor';
-import { LIST_ITEMS, schemaFor, schemaCovers, serialize, titles } from './schema.js';
+import { LIST_ITEMS, schemaFor, schemaCovers, serialize, titles, formatDate } from './schema.js';
 import { backspaceAtItemStart, enterInItem, lift, setChecked, sink, toggleTodo } from './commands.js';
 import { placeholderPlugin, suggestPlugin, toggleHighlight, toolbarPlugin } from './menus.js';
+import { createPalette } from './palette.js';
 
 const SAVE_DELAY = 600;
 const POLL_INTERVAL = 3000;
@@ -35,17 +37,201 @@ async function searchCards(query) {
   return r.results || [];
 }
 
-/** Opens a mention in Heptabase. Journals live at heptabase://card/<date>. */
-function openInHeptabase(kind, id) {
-  if (!id) return;
-  const route = kind === 'date' ? 'card' : kind;
-  post({ action: 'openURL', url: `heptabase://${route}/${id}` });
+// MARK: which card is shown
+
+const el = (id) => document.getElementById(id);
+let view = null;
+let current = null;       // { kind: 'journal' | 'note', id }
+let followToday = true;   // showing today's journal: switch to the new day at midnight
+let baseMd5 = null;       // md5 of the last version we know Heptabase has
+let dirty = false;        // local edits not yet saved
+let saving = null;        // in-flight save promise
+let saveTimer = null;
+let lastEdit = 0;
+let loadingRemote = false; // set while applying Heptabase's version, so it isn't saved back
+
+function today() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
+
+const isDate = (id) => /^\d{4}-\d{2}-\d{2}$/.test(id || '');
+
+/** Heptabase's card types that HeptaFloat can edit, mapped to how the CLI reads them. */
+function editableKind(objectType, id) {
+  if (objectType === 'journal' || isDate(id)) return 'journal';
+  if (objectType === 'note') return 'note';
+  return null;
+}
+
+function openInHeptabase(id) {
+  if (id) post({ action: 'openURL', url: `heptabase://card/${id}` });
+}
+
+/** Opens a card in the floating card if it's a note or journal, otherwise in Heptabase. */
+async function openHere(card) {
+  let kind = editableKind(card.objectType, card.id);
+  if (!kind && !card.objectType) {
+    const info = await call('cardType', { id: card.id });
+    kind = editableKind(info.cardType, card.id);
+  }
+  if (!kind) { openInHeptabase(card.id); return; }
+  await show({ kind, id: card.id });
+}
+
+/** Switches the editor to another card, saving the current one first. */
+async function show(target, { focusEnd = true } = {}) {
+  if (current && target.kind === current.kind && target.id === current.id) { view?.focus(); return; }
+  if (dirty) await save();
+  else if (saving) await saving;
+  const r = await call('read', target);
+  if (r.error) { status(r.error, { error: true }); return; }
+  clearError();
+  followToday = target.kind === 'journal' && target.id === today();
+  applyRemote(r, { keepSelection: false });
+  if (focusEnd) {
+    view.dispatch(view.state.tr.setSelection(endOfText(view.state.doc)).scrollIntoView());
+    el('main').scrollTop = 0;
+  }
+  view.focus();
+  touchRecent(r);
+}
+
+function touchRecent(r) {
+  post({
+    action: 'touchRecent', id: current.id, objectType: current.kind, title: r.title || '',
+    chars: view ? [...view.state.doc.textContent].length : 0,
+  });
+}
+
+// MARK: shortcuts (remappable; the Swift host sends the user's choices)
+
+const bindings = {
+  bold: 'Mod-b', italic: 'Mod-i', underline: 'Mod-u', strike: 'Mod-Shift-x', code: 'Mod-e', link: 'Mod-k',
+  highlight: 'Mod-Shift-h', toggleTodo: 'Mod-Enter', paragraph: 'Mod-Alt-0',
+  heading1: 'Mod-Alt-1', heading2: 'Mod-Alt-2', heading3: 'Mod-Alt-3',
+  search: 'Mod-o', recent: 'Mod-p', today: 'Mod-t', openInHeptabase: 'Mod-Shift-o',
+};
+
+/** Named commands, run from the keymap here or from the app's menus. */
+function commandFor(name, schema) {
+  const n = schema.nodes, m = schema.marks;
+  const run = (fn) => () => { fn(); return true; };
+  return {
+    bold: toggleMark(m.strong), italic: toggleMark(m.em), underline: toggleMark(m.underline),
+    strike: toggleMark(m.strike), code: toggleMark(m.code), highlight: toggleHighlight, toggleTodo,
+    link: run(() => document.dispatchEvent(new CustomEvent('hf-link'))),
+    paragraph: setBlockType(n.paragraph),
+    heading1: setBlockType(n.heading, { level: 1 }), heading2: setBlockType(n.heading, { level: 2 }),
+    heading3: setBlockType(n.heading, { level: 3 }),
+    search: run(() => palette.toggle('search')), recent: run(() => palette.toggle('recent')),
+    today: run(() => show({ kind: 'journal', id: today() })),
+    openInHeptabase: run(() => openInHeptabase(current?.id)),
+  }[name];
+}
+
+// MARK: card pickers (⌘P recent, ⌘O search)
+
+const palette = createPalette({
+  recents: async () => {
+    const cards = (await call('recents')).cards || [];
+    const list = cards.map((c) => ({ ...c, title: c.title || (isDate(c.id) ? formatDate(c.id) : 'Untitled'), current: c.id === current?.id }));
+    // Today's journal is always one keystroke away, even before it's in the history.
+    if (!list.some((c) => c.id === today())) list.push({ id: today(), objectType: 'journal', title: `${formatDate(today())} · Today` });
+    return list.sort((a, b) => (b.current ? 1 : 0) - (a.current ? 1 : 0));
+  },
+  search: searchCards,
+  open: (card) => openHere(card),
+  openInHeptabase: (card) => openInHeptabase(card.id),
+  pin: (card, on) => call('pinCard', { id: card.id, pinned: on }),
+  forget: (card) => call('forgetCard', { id: card.id }),
+  onClose: () => view?.focus(),
+  pickerFor: (e) => {
+    const key = keyName(e);
+    return key === normalize(bindings.search) ? 'search' : key === normalize(bindings.recent) ? 'recent' : null;
+  },
+});
+
+/** "Mod-Shift-o" in a fixed modifier order, so keys typed and keys bound compare equal. */
+function normalize(name) {
+  const parts = name.split('-'), key = parts.pop().toLowerCase();
+  return [...parts.sort(), key].join('-');
+}
+function keyName(e) {
+  const mods = [e.altKey && 'Alt', e.ctrlKey && 'Ctrl', e.metaKey && 'Mod', e.shiftKey && 'Shift'].filter(Boolean);
+  const key = e.key === 'Enter' ? 'enter' : e.code?.startsWith('Key') ? e.code.slice(3).toLowerCase()
+    : e.code?.startsWith('Digit') ? e.code.slice(5) : e.key.toLowerCase();
+  return [...mods.sort(), key].join('-');
+}
+
+// MARK: mention popup — choose where to open a linked card
+
+const mentionPopup = (() => {
+  const pop = document.createElement('div');
+  pop.className = 'popup mention-pop';
+  document.body.append(pop);
+  let chip = null, hideTimer = null, showTimer = null, pinned = false;
+
+  function place(target) {
+    const r = target.getBoundingClientRect();
+    pop.style.display = 'block';
+    const w = pop.offsetWidth, h = pop.offsetHeight;
+    pop.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - w - 8))}px`;
+    pop.style.top = `${r.bottom + 6 + h < window.innerHeight - 8 ? r.bottom + 6 : r.top - h - 6}px`;
+  }
+
+  function open(target, pin = false) {
+    clearTimeout(hideTimer);
+    chip = target;
+    pinned = pin;
+    const { kind, id } = target.dataset;
+    const here = kind === 'card' || kind === 'date';
+    const label = target.textContent || 'Card';
+    pop.innerHTML = `<div class="mp-title">${label.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))}</div>`
+      + (here ? '<button data-where="here"><span>Open here</span><kbd>↵</kbd></button>' : '')
+      + '<button data-where="heptabase"><span>Open in Heptabase</span><kbd>⌘ click</kbd></button>';
+    place(target);
+    pop.dataset.id = id;
+    pop.dataset.kind = kind;
+  }
+
+  function close() { pop.style.display = 'none'; chip = null; pinned = false; }
+  function hideSoon() { clearTimeout(hideTimer); if (!pinned) hideTimer = setTimeout(close, 220); }
+
+  pop.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    const b = e.target.closest('[data-where]');
+    if (!b) return;
+    const { id, kind } = pop.dataset;
+    close();
+    if (b.dataset.where === 'heptabase') openInHeptabase(id);
+    else openHere({ id, objectType: kind === 'date' ? 'journal' : undefined });
+  });
+  pop.addEventListener('mouseenter', () => clearTimeout(hideTimer));
+  pop.addEventListener('mouseleave', hideSoon);
+
+  document.addEventListener('mouseover', (e) => {
+    const target = e.target.closest?.('.ProseMirror .chip[data-id]');
+    if (!target || !target.dataset.id) return;
+    clearTimeout(hideTimer);
+    clearTimeout(showTimer);
+    if (chip !== target) showTimer = setTimeout(() => open(target), 350);
+    target.addEventListener('mouseleave', () => { clearTimeout(showTimer); hideSoon(); }, { once: true });
+  });
+  document.addEventListener('mousedown', (e) => { if (pinned && !pop.contains(e.target) && e.target !== chip) close(); });
+  document.addEventListener('keydown', (e) => {
+    if (!pinned || pop.style.display === 'none') return;
+    if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); pop.querySelector('[data-where]')?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); }
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
+  }, true);
+
+  return { open, close };
+})();
 
 // MARK: plugins
 
 function buildPlugins(schema) {
-  const n = schema.nodes, m = schema.marks;
+  const n = schema.nodes;
   const rules = [
     wrappingInputRule(/^\s*[-*]\s$/, n.bullet_list_item),
     wrappingInputRule(/^(\d+)\.\s$/, n.numbered_list_item),
@@ -60,20 +246,14 @@ function buildPlugins(schema) {
         .insert($s.before() + 1, n.paragraph.create());
     }),
   ];
+  const remappable = Object.fromEntries(Object.entries(bindings).map(([name, key]) => [key, commandFor(name, schema)]));
   return [
     suggestPlugin(searchCards),
     toolbarPlugin((url) => post({ action: 'openURL', url })),
     inputRules({ rules }),
     keymap({
+      ...remappable,
       'Mod-z': undo, 'Shift-Mod-z': redo, 'Mod-y': redo,
-      'Mod-b': toggleMark(m.strong), 'Mod-i': toggleMark(m.em), 'Mod-u': toggleMark(m.underline),
-      'Mod-Shift-x': toggleMark(m.strike), 'Mod-e': toggleMark(m.code),
-      'Mod-Enter': toggleTodo,
-      'Mod-Shift-h': toggleHighlight,
-      'Mod-Alt-0': setBlockType(n.paragraph),
-      'Mod-Alt-1': setBlockType(n.heading, { level: 1 }),
-      'Mod-Alt-2': setBlockType(n.heading, { level: 2 }),
-      'Mod-Alt-3': setBlockType(n.heading, { level: 3 }),
       Enter: enterInItem,
       Backspace: backspaceAtItemStart,
       Tab: sink, 'Shift-Tab': lift,
@@ -140,22 +320,7 @@ function endOfText(doc) {
   return Selection.findFrom(doc.resolve(doc.content.size), -1, true) ?? Selection.atEnd(doc);
 }
 
-// MARK: state
-
-const el = (id) => document.getElementById(id);
-let view = null;
-let date = null;          // journal date being shown
-let baseMd5 = null;       // md5 of the last version we know Heptabase has
-let dirty = false;        // local edits not yet saved
-let saving = null;        // in-flight save promise
-let saveTimer = null;
-let lastEdit = 0;
-let loadingRemote = false; // set while applying Heptabase's version, so it isn't saved back
-
-function today() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
+// MARK: chrome
 
 /** Footer status. Errors stay until things work again; the full text is in the tooltip. */
 function status(text, { sticky = false, error = false } = {}) {
@@ -181,20 +346,36 @@ function updateCount() {
   el('todos').classList.toggle('show', open > 0);
 }
 
-function setTitle(result) {
-  const [y, m, d] = (result.date || '').split('-').map(Number);
-  el('weekday').textContent = y ? new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'long' }) : '';
-  el('bigtitle').textContent = result.title || result.date;
-  el('title').textContent = result.title || result.date;
+/** Journals get Heptabase's weekday + date title. Notes show their title only when it isn't
+ *  already the first line (web clips keep it separately). */
+function setTitle(result, json) {
+  const title = result.title || (isDate(result.id) ? formatDate(result.id) : 'Untitled');
+  el('title').textContent = title;
+  if (result.kind === 'journal') {
+    const [y, m, d] = result.id.split('-').map(Number);
+    el('weekday').textContent = new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'long' });
+    el('bigtitle').textContent = title;
+    el('jtitle').hidden = false;
+  } else {
+    const first = json.content?.[0];
+    const firstText = (function text(n) { return n?.text ?? (n?.content || []).map(text).join(''); })(first).trim();
+    const duplicate = first?.type === 'heading' && firstText === title.trim();
+    el('weekday').textContent = '';
+    el('bigtitle').textContent = title;
+    el('jtitle').hidden = duplicate;
+  }
+  document.body.dataset.kind = result.kind;
 }
 
+// MARK: load / save / sync
+
 function load(result, { keepSelection } = {}) {
-  date = result.date;
+  current = { kind: result.kind, id: result.id };
   baseMd5 = result.contentMd5;
-  setTitle(result);
   let json;
   try { json = JSON.parse(result.content); } catch { json = { type: 'doc', content: [{ type: 'paragraph' }] }; }
   if (!json.content?.length) json.content = [{ type: 'paragraph' }];
+  setTitle(result, json);
 
   if (view && keepSelection && schemaCovers(view.state.schema, json)) {
     const { prepared } = schemaFor(json);
@@ -216,7 +397,11 @@ function load(result, { keepSelection } = {}) {
       scrollMargin: { top: 64, bottom: 72, left: 0, right: 0 },
       handleClickOn(_v, _pos, _node, _nodePos, event) {
         const chip = event.target.closest('.chip[data-id]');
-        if (chip && chip.dataset.id) { openInHeptabase(chip.dataset.kind, chip.dataset.id); return true; }
+        if (chip && chip.dataset.id) {
+          if (event.metaKey) openInHeptabase(chip.dataset.id);
+          else mentionPopup.open(chip, true);
+          return true;
+        }
         const bookmark = event.target.closest('a.bookmark[href]');
         if (bookmark) { post({ action: 'openURL', url: bookmark.href }); return true; }
         return false;
@@ -239,30 +424,30 @@ function onLocalChange() {
 async function save() {
   clearTimeout(saveTimer);
   if (saving) { await saving; if (!dirty) return; }
-  if (!dirty || !view) return;
-  const doc = view.state.doc;
+  if (!dirty || !view || !current) return;
+  const doc = view.state.doc, target = { ...current };
   const content = JSON.stringify(serialize(doc));
   dirty = false;
   status('Saving…', { sticky: true });
-  saving = call('save', { date, content, md5: baseMd5 }).then((r) => {
+  saving = call('save', { ...target, content, md5: baseMd5 }).then((r) => {
     saving = null;
+    const stillShown = current && current.id === target.id;
     if (!r.error) {
-      baseMd5 = r.current.contentMd5;
-      adoptIds(doc, r.current);
+      if (stillShown) { baseMd5 = r.current.contentMd5; adoptIds(doc, r.current); touchRecent(r.current); }
       clearError();
       status('Saved');
     } else if (!r.current) {
       // Heptabase unreachable: keep the edit and try again.
-      dirty = true;
+      dirty = stillShown;
       status(`Not saved — ${r.error}`, { error: true });
-      saveTimer = setTimeout(save, 3000);
-    } else if (r.current.contentMd5 !== baseMd5) {
+      if (stillShown) saveTimer = setTimeout(save, 3000);
+    } else if (stillShown && r.current.contentMd5 !== baseMd5) {
       // Edited in Heptabase meanwhile. Take their version unless we've typed since.
       baseMd5 = r.current.contentMd5;
       if (dirty) save();
       else { status('Changed in Heptabase — reloaded'); applyRemote(r.current); }
     } else {
-      dirty = true;
+      dirty = stillShown;
       status(`Not saved — ${r.error}`, { error: true });
     }
   });
@@ -270,10 +455,10 @@ async function save() {
 }
 
 /** After a save the CLI assigns ids to new blocks; copy them in so later saves keep them. */
-function adoptIds(savedDoc, current) {
+function adoptIds(savedDoc, cur) {
   if (!view || !view.state.doc.eq(savedDoc)) return;
   let remote;
-  try { remote = JSON.parse(current.content); } catch { return; }
+  try { remote = JSON.parse(cur.content); } catch { return; }
   const tr = view.state.tr;
   const walk = (node, json, pos) => {
     if (!json || json.type !== node.type.name) return;
@@ -297,16 +482,15 @@ function applyRemote(result, opts = { keepSelection: true }) {
 }
 
 async function poll() {
-  const want = today();
-  if (dirty || saving || Date.now() - lastEdit < 1500) return;
-  const r = await call('read', { date: want });
+  if (!current || dirty || saving || Date.now() - lastEdit < 1500) return;
+  // Showing today's journal: follow the date across midnight.
+  if (followToday && current.id !== today()) { show({ kind: 'journal', id: today() }); return; }
+  const target = { ...current };
+  const r = await call('read', target);
   if (r.error) { status(r.error, { error: true }); return; }
   clearError();
-  if (dirty || saving) return;
-  if (want !== date) {
-    applyRemote(r, { keepSelection: false });
-    view.dispatch(view.state.tr.setSelection(endOfText(view.state.doc)));
-  } else if (r.contentMd5 !== baseMd5) applyRemote(r);
+  if (dirty || saving || current.id !== target.id) return;
+  if (r.contentMd5 !== baseMd5) applyRemote(r);
 }
 
 window.hf = {
@@ -321,23 +505,37 @@ window.hf = {
     Object.assign(titles, map);
     for (const c of document.querySelectorAll('.chip[data-id]')) if (map[c.dataset.id]) c.textContent = map[c.dataset.id];
   },
+  /** { bold: "Mod-b", … } from Settings → Shortcuts. */
+  setShortcuts(map) {
+    Object.assign(bindings, map);
+    if (view) view.updateState(view.state.reconfigure({ plugins: buildPlugins(view.state.schema) }));
+  },
+  /** Runs a named command from the app menus. */
+  command(name) {
+    if (!view) return;
+    const cmd = commandFor(name, view.state.schema);
+    if (cmd) cmd(view.state, view.dispatch, view);
+    if (!palette.isOpen) view.focus();
+  },
 };
 
 el('close').onclick = () => post({ action: 'hide' });
 el('pin').onclick = () => post({ action: 'togglePin' });
-el('open').onclick = () => openInHeptabase('card', date);
+el('open').onclick = () => openInHeptabase(current?.id);
 
 (async () => {
-  const r = await call('read', { date: today() });
+  const r = await call('read', { kind: 'journal', id: today() });
   if (r.error) {
     status(r.error, { error: true });
     // Keep trying until Heptabase is reachable, then start normally.
     setTimeout(() => location.reload(), POLL_INTERVAL * 2);
     return;
   }
+  followToday = true;
   applyRemote(r, { keepSelection: false });
   view.dispatch(view.state.tr.setSelection(endOfText(view.state.doc)));
   view.focus();
+  touchRecent(r);
   // Start at the end of the journal, ready to write; wait for Inter so the measurement holds.
   document.fonts.ready.then(() => view.dispatch(view.state.tr.scrollIntoView()));
   setInterval(poll, POLL_INTERVAL);

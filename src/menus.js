@@ -316,6 +316,8 @@ export function toolbarPlugin(onOpenLink) {
         el.style.left = `${Math.max(8, Math.min(mid - w / 2, window.innerWidth - w - 8))}px`;
         el.style.top = `${a.top - h - 8 > 30 ? a.top - h - 8 : b.bottom + 8}px`;
       };
+      // The link shortcut is remappable, so the editor asks for link mode with an event.
+      document.addEventListener('hf-link', () => { if (!view.state.selection.empty) { mode = 'link'; render(view); } });
       view.dom.addEventListener('blur', () => setTimeout(() => render(view), 0));
       view.dom.addEventListener('mousedown', () => { el.style.display = 'none'; mode = null; });
       view.dom.addEventListener('mouseup', () => setTimeout(() => render(view), 0));
@@ -323,11 +325,6 @@ export function toolbarPlugin(onOpenLink) {
     },
     props: {
       handleKeyDown(view, e) {
-        if (e.metaKey && e.key === 'k' && !view.state.selection.empty) {
-          mode = 'link';
-          render(view);
-          return true;
-        }
         if (e.key === 'Escape' && mode) { mode = null; render(view); return true; }
         return false;
       },

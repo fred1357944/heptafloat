@@ -61,16 +61,29 @@ enum Heptabase {
         return first.count > 140 ? String(first.prefix(140)) + "…" : first
     }
 
-    static func readJournal(_ date: String) throws -> [String: Any] {
-        try run(["journal", "read", date])
+    /// HeptaFloat edits two kinds of cards: journals (id is a date) and notes (id is a UUID).
+    enum Kind: String { case journal, note }
+
+    static func read(_ kind: Kind, _ id: String) throws -> [String: Any] {
+        var r = try run([kind.rawValue, "read", id])
+        r["kind"] = kind.rawValue
+        r["id"] = id
+        return r
     }
 
-    /// Replaces the journal's content, guarded by the md5 of the version the edit was based on.
-    static func saveJournal(_ date: String, content: String, md5: String) throws {
+    static func readJournal(_ date: String) throws -> [String: Any] { try read(.journal, date) }
+
+    /// Replaces the card's content, guarded by the md5 of the version the edit was based on.
+    static func save(_ kind: Kind, _ id: String, content: String, md5: String) throws {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("heptafloat-\(UUID().uuidString).json")
         try content.write(to: file, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: file) }
-        _ = try run(["journal", "save", date, "--content-md5", md5, "--content-file", file.path])
+        _ = try run([kind.rawValue, "save", id, "--content-md5", md5, "--content-file", file.path])
+    }
+
+    /// The card's type ("note", "journal", "pdfCard", …), to decide whether HeptaFloat can open it.
+    static func cardType(_ id: String) throws -> [String: Any] {
+        try run(["card", "properties", id])
     }
 
     /// Cards for the mention menu: recent ones for an empty query, otherwise matches with title hits first.
@@ -157,6 +170,131 @@ enum Settings {
     static let changed = Notification.Name("HeptaFloatSettingsChanged")
 }
 
+// MARK: - Recent cards
+
+/// Cards opened in HeptaFloat — our own history, kept on this Mac, separate from Heptabase's.
+enum Recents {
+    private static let key = "recentCards"
+    private static let limit = 40
+
+    static var all: [[String: Any]] {
+        get { UserDefaults.standard.array(forKey: key) as? [[String: Any]] ?? [] }
+        set { UserDefaults.standard.set(Array(newValue.prefix(limit)), forKey: key) }
+    }
+
+    /// Moves a card to the top (or refreshes its title and length), keeping its pin.
+    static func touch(_ card: [String: Any]) {
+        guard let id = card["id"] as? String else { return }
+        var list = all
+        let old = list.first { $0["id"] as? String == id }
+        list.removeAll { $0["id"] as? String == id }
+        var entry = old ?? [:]
+        for (k, v) in card where k != "action" && k != "requestId" { entry[k] = v }
+        entry["openedAt"] = ISO8601DateFormatter().string(from: Date())
+        list.insert(entry, at: 0)
+        all = list
+    }
+
+    static func update(_ id: String, _ change: (inout [String: Any]) -> Void) {
+        all = all.map { var c = $0; if c["id"] as? String == id { change(&c) }; return c }
+    }
+
+    static func forget(_ id: String) { all = all.filter { $0["id"] as? String != id } }
+}
+
+// MARK: - Keyboard shortcuts
+
+/// Every remappable shortcut. Global toggles the card from any app; app shortcuts live in the menus;
+/// editor shortcuts are also menu items (Format) and are pushed to the editor's keymap.
+struct ShortcutDef {
+    enum Scope { case global, app, editor }
+    let id: String
+    let title: String
+    let group: String
+    let defaultSpec: String
+    let scope: Scope
+
+    static let all: [ShortcutDef] = [
+        .init(id: "toggle", title: "Show / hide HeptaFloat", group: "Anywhere", defaultSpec: "ctrl+opt+j", scope: .global),
+        .init(id: "search", title: "Search cards", group: "Cards", defaultSpec: "cmd+o", scope: .app),
+        .init(id: "recent", title: "Recent cards", group: "Cards", defaultSpec: "cmd+p", scope: .app),
+        .init(id: "today", title: "Today's journal", group: "Cards", defaultSpec: "cmd+t", scope: .app),
+        .init(id: "openInHeptabase", title: "Open in Heptabase", group: "Cards", defaultSpec: "cmd+shift+o", scope: .app),
+        .init(id: "settings", title: "Settings", group: "Window", defaultSpec: "cmd+,", scope: .app),
+        .init(id: "keepOnTop", title: "Keep on top", group: "Window", defaultSpec: "cmd+shift+p", scope: .app),
+        .init(id: "biggerText", title: "Bigger text", group: "Window", defaultSpec: "cmd+=", scope: .app),
+        .init(id: "smallerText", title: "Smaller text", group: "Window", defaultSpec: "cmd+-", scope: .app),
+        .init(id: "actualSize", title: "Actual size", group: "Window", defaultSpec: "cmd+0", scope: .app),
+        .init(id: "bold", title: "Bold", group: "Editing", defaultSpec: "cmd+b", scope: .editor),
+        .init(id: "italic", title: "Italic", group: "Editing", defaultSpec: "cmd+i", scope: .editor),
+        .init(id: "underline", title: "Underline", group: "Editing", defaultSpec: "cmd+u", scope: .editor),
+        .init(id: "strike", title: "Strikethrough", group: "Editing", defaultSpec: "cmd+shift+x", scope: .editor),
+        .init(id: "code", title: "Inline code", group: "Editing", defaultSpec: "cmd+e", scope: .editor),
+        .init(id: "link", title: "Link", group: "Editing", defaultSpec: "cmd+k", scope: .editor),
+        .init(id: "highlight", title: "Highlight", group: "Editing", defaultSpec: "cmd+shift+h", scope: .editor),
+        .init(id: "toggleTodo", title: "Tick / untick to-do", group: "Editing", defaultSpec: "cmd+return", scope: .editor),
+        .init(id: "paragraph", title: "Plain text", group: "Editing", defaultSpec: "cmd+opt+0", scope: .editor),
+        .init(id: "heading1", title: "Heading 1", group: "Editing", defaultSpec: "cmd+opt+1", scope: .editor),
+        .init(id: "heading2", title: "Heading 2", group: "Editing", defaultSpec: "cmd+opt+2", scope: .editor),
+        .init(id: "heading3", title: "Heading 3", group: "Editing", defaultSpec: "cmd+opt+3", scope: .editor),
+    ]
+    static let groups = ["Anywhere", "Cards", "Window", "Editing"]
+
+    /// Keys every Mac app shares; shown in Settings but not remappable.
+    static let builtIn: [(String, String)] = [
+        ("Undo / Redo", "⌘Z  ⌘⇧Z"), ("Cut / Copy / Paste", "⌘X  ⌘C  ⌘V"), ("Select all", "⌘A"),
+        ("Hide card", "Esc  ⌘W  ⌘H"), ("Quit", "⌘Q"), ("Indent / outdent", "Tab  ⇧Tab"),
+        ("Block menu", "/"), ("Mention a card", "@  [["), ("In menus and pickers", "↑ ↓  ↵  Esc"),
+        ("Markdown", "-  1.  []  +  >  #  ```  ---"),
+    ]
+    static let reserved = ["cmd+z", "cmd+shift+z", "cmd+x", "cmd+c", "cmd+v", "cmd+a", "cmd+w", "cmd+h", "cmd+q"]
+
+    static func spec(_ id: String) -> String {
+        if id == "toggle" { return Settings.hotkey }
+        return (UserDefaults.standard.dictionary(forKey: "shortcuts") as? [String: String])?[id]
+            ?? all.first { $0.id == id }?.defaultSpec ?? ""
+    }
+
+    static func set(_ id: String, _ spec: String) {
+        if id == "toggle" { Settings.hotkey = spec; return }
+        var map = UserDefaults.standard.dictionary(forKey: "shortcuts") as? [String: String] ?? [:]
+        map[id] = spec == all.first(where: { $0.id == id })?.defaultSpec ? nil : spec
+        UserDefaults.standard.set(map, forKey: "shortcuts")
+    }
+
+    /// Menu key equivalent for a spec like "cmd+shift+o".
+    static func menuKey(_ spec: String) -> (key: String, mods: NSEvent.ModifierFlags) {
+        var mods: NSEvent.ModifierFlags = [], key = ""
+        for part in spec.split(separator: "+").map(String.init) {
+            switch part {
+            case "cmd": mods.insert(.command)
+            case "ctrl": mods.insert(.control)
+            case "opt": mods.insert(.option)
+            case "shift": mods.insert(.shift)
+            case "return": key = "\r"
+            case "space": key = " "
+            default: key = part
+            }
+        }
+        return (key, mods)
+    }
+
+    /// The editor's keymap name for a spec, e.g. "Mod-Shift-o".
+    static func editorKey(_ spec: String) -> String {
+        spec.split(separator: "+").map { part -> String in
+            switch part {
+            case "cmd": return "Mod"
+            case "ctrl": return "Ctrl"
+            case "opt": return "Alt"
+            case "shift": return "Shift"
+            case "return": return "Enter"
+            case "space": return "Space"
+            default: return String(part)
+            }
+        }.joined(separator: "-")
+    }
+}
+
 // MARK: - Global hotkey
 
 /// A system-wide hotkey via Carbon, which needs no Accessibility permission.
@@ -166,7 +304,7 @@ final class HotKey {
     private var handler: EventHandlerRef?
     private let action: () -> Void
 
-    private static let keyCodes: [String: Int] = [
+    static let keyCodes: [String: Int] = [
         "a": kVK_ANSI_A, "b": kVK_ANSI_B, "c": kVK_ANSI_C, "d": kVK_ANSI_D, "e": kVK_ANSI_E, "f": kVK_ANSI_F,
         "g": kVK_ANSI_G, "h": kVK_ANSI_H, "i": kVK_ANSI_I, "j": kVK_ANSI_J, "k": kVK_ANSI_K, "l": kVK_ANSI_L,
         "m": kVK_ANSI_M, "n": kVK_ANSI_N, "o": kVK_ANSI_O, "p": kVK_ANSI_P, "q": kVK_ANSI_Q, "r": kVK_ANSI_R,
@@ -175,6 +313,8 @@ final class HotKey {
         "4": kVK_ANSI_4, "5": kVK_ANSI_5, "6": kVK_ANSI_6, "7": kVK_ANSI_7, "8": kVK_ANSI_8, "9": kVK_ANSI_9,
         "space": kVK_Space, "return": kVK_Return, ";": kVK_ANSI_Semicolon, "'": kVK_ANSI_Quote,
         ",": kVK_ANSI_Comma, ".": kVK_ANSI_Period, "/": kVK_ANSI_Slash, "`": kVK_ANSI_Grave,
+        "=": kVK_ANSI_Equal, "-": kVK_ANSI_Minus, "[": kVK_ANSI_LeftBracket, "]": kVK_ANSI_RightBracket,
+        "\\": kVK_ANSI_Backslash,
     ]
 
     /// Parses "ctrl+opt+j" into a Carbon key code, modifier mask, and "⌃⌥J".
@@ -186,7 +326,7 @@ final class HotKey {
             case "opt", "option", "alt": mods |= optionKey; symbols += "⌥"
             case "shift": mods |= shiftKey; symbols += "⇧"
             case "cmd", "command": mods |= cmdKey; symbols += "⌘"
-            default: key = keyCodes[part]; symbols += part == "space" ? " Space" : part.uppercased()
+            default: key = keyCodes[part]; symbols += ["space": " Space", "return": "↩"][part] ?? part.uppercased()
             }
         }
         return key.map { ($0, mods, symbols) }
@@ -386,9 +526,7 @@ final class JournalWindow: NSObject, WKScriptMessageHandler, WKNavigationDelegat
     func undo() { web.evaluateJavaScript("window.hf.undo()") }
     func redo() { web.evaluateJavaScript("window.hf.redo()") }
 
-    func openInHeptabase() {
-        web.evaluateJavaScript("document.getElementById('open').click()")
-    }
+    func openInHeptabase() { command("openInHeptabase") }
 
     /// Waits for any pending save, so the last keystrokes reach Heptabase.
     func flush(then done: @escaping () -> Void) {
@@ -425,10 +563,10 @@ final class JournalWindow: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         let requestId = body["requestId"] ?? 0
         switch action {
         case "read":
-            guard let date = body["date"] as? String else { return }
+            guard let kind = Heptabase.Kind(rawValue: body["kind"] as? String ?? ""), let id = body["id"] as? String else { return }
             Heptabase.queue.async {
                 do {
-                    let r = try Heptabase.readJournal(date)
+                    let r = try Heptabase.read(kind, id)
                     self.reply(requestId, r)
                     if let content = r["content"] as? String { self.pushTitles(for: content) }
                 } catch {
@@ -436,19 +574,34 @@ final class JournalWindow: NSObject, WKScriptMessageHandler, WKNavigationDelegat
                 }
             }
         case "save":
-            guard let date = body["date"] as? String, let content = body["content"] as? String,
-                  let md5 = body["md5"] as? String else { return }
+            guard let kind = Heptabase.Kind(rawValue: body["kind"] as? String ?? ""), let id = body["id"] as? String,
+                  let content = body["content"] as? String, let md5 = body["md5"] as? String else { return }
             Heptabase.queue.async {
                 var result: [String: Any] = [:]
                 do {
-                    try Heptabase.saveJournal(date, content: content, md5: md5)
+                    try Heptabase.save(kind, id, content: content, md5: md5)
                 } catch {
                     result["error"] = Self.message(error)
                 }
                 // Hand back what Heptabase now has: its md5 and the ids it assigned to new blocks.
-                result["current"] = try? Heptabase.readJournal(date)
+                result["current"] = try? Heptabase.read(kind, id)
                 self.reply(requestId, result)
             }
+        case "cardType":
+            guard let id = body["id"] as? String else { return }
+            Heptabase.searchQueue.async {
+                do { self.reply(requestId, try Heptabase.cardType(id)) } catch { self.reply(requestId, ["error": Self.message(error)]) }
+            }
+        case "recents":
+            reply(requestId, ["cards": Recents.all])
+        case "touchRecent":
+            Recents.touch(body)
+        case "pinCard":
+            if let id = body["id"] as? String { Recents.update(id) { $0["pinned"] = body["pinned"] as? Bool ?? false } }
+            reply(requestId, [:])
+        case "forgetCard":
+            if let id = body["id"] as? String { Recents.forget(id) }
+            reply(requestId, [:])
         case "search":
             let query = body["query"] as? String ?? ""
             Heptabase.searchQueue.async {
@@ -467,6 +620,19 @@ final class JournalWindow: NSObject, WKScriptMessageHandler, WKNavigationDelegat
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         web.evaluateJavaScript("window.hf.setScale(\(Settings.fontScale)); window.hf.setPinned(\(Settings.pinned))")
+        pushShortcuts()
+    }
+
+    /// Sends the editor its keymap: { bold: "Mod-b", … }.
+    func pushShortcuts() {
+        let map = Dictionary(uniqueKeysWithValues: ShortcutDef.all.filter { $0.scope != .global }.map { ($0.id, ShortcutDef.editorKey(ShortcutDef.spec($0.id))) })
+        guard let data = try? JSONSerialization.data(withJSONObject: map), let json = String(data: data, encoding: .utf8) else { return }
+        web.evaluateJavaScript("window.hf && window.hf.setShortcuts(\(json))")
+    }
+
+    /// Runs an editor or card command by name ("bold", "search", "today", …).
+    func command(_ name: String) {
+        web.evaluateJavaScript("window.hf && window.hf.command('\(name)')")
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
@@ -541,47 +707,65 @@ extension Heptabase {
 // MARK: - Settings window
 
 final class SettingsModel: ObservableObject {
-    @Published var hotkey = Settings.hotkey
-    @Published var hotkeyProblem: String?
     @Published var appearance = Settings.appearance
     @Published var pinned = Settings.pinned
     @Published var fontScale = Settings.fontScale
     @Published var launchAtLogin = SMAppService.mainApp.status == .enabled
     @Published var loginProblem: String?
     @Published var connection = ConnectionStatus.checking
+    @Published var shortcuts: [String: String] = [:]
+    @Published var shortcutProblems: [String: String] = [:]
 
     /// Hooks into the running app, set by AppDelegate.
-    var applyHotkey: () -> Bool = { true }
+    var applyShortcuts: () -> Bool = { true }  // false if the global hotkey couldn't register
     var pauseHotkey: () -> Void = {}
     var applyAppearance: () -> Void = {}
     var applyPinned: () -> Void = {}
     var applyFontScale: () -> Void = {}
 
     init() {
+        reload()
         NotificationCenter.default.addObserver(forName: Settings.changed, object: nil, queue: .main) { [weak self] _ in
             self?.reload()
         }
     }
 
     func reload() {
-        hotkey = Settings.hotkey
         appearance = Settings.appearance
         pinned = Settings.pinned
         fontScale = Settings.fontScale
         launchAtLogin = SMAppService.mainApp.status == .enabled
+        shortcuts = Dictionary(uniqueKeysWithValues: ShortcutDef.all.map { ($0.id, ShortcutDef.spec($0.id)) })
     }
 
-    func setHotkey(_ spec: String) {
-        let previous = Settings.hotkey
-        Settings.hotkey = spec
-        if applyHotkey() {
-            hotkey = spec
-            hotkeyProblem = nil
-        } else {
-            Settings.hotkey = previous
-            _ = applyHotkey()
-            hotkeyProblem = "That shortcut isn't available. Try another one."
+    /// Assigns keys to a shortcut, refusing ones that are taken.
+    func setShortcut(_ id: String, _ spec: String) {
+        shortcutProblems[id] = nil
+        if let other = ShortcutDef.all.first(where: { $0.id != id && shortcuts[$0.id] == spec }) {
+            shortcutProblems[id] = "Already used by “\(other.title)”."
+            return
         }
+        if ShortcutDef.reserved.contains(spec) {
+            shortcutProblems[id] = "That's a standard Mac shortcut. Pick another one."
+            return
+        }
+        let previous = ShortcutDef.spec(id)
+        ShortcutDef.set(id, spec)
+        if applyShortcuts() {
+            shortcuts[id] = spec
+        } else {
+            ShortcutDef.set(id, previous)
+            _ = applyShortcuts()
+            shortcutProblems[id] = "macOS didn't accept that shortcut. Try another one."
+        }
+    }
+
+    func resetAllShortcuts() {
+        UserDefaults.standard.removeObject(forKey: "shortcuts")
+        Settings.hotkey = Settings.defaultHotkey
+        shortcutProblems = [:]
+        _ = applyShortcuts()
+        reload()
     }
 
     func setAppearance(_ a: Appearance) { Settings.appearance = a; appearance = a; applyAppearance() }
@@ -613,22 +797,26 @@ final class SettingsModel: ObservableObject {
 /// Click, then press the keys you want. Esc cancels.
 struct ShortcutRecorder: View {
     @ObservedObject var model: SettingsModel
+    let def: ShortcutDef
     @State private var recording = false
     @State private var monitor: Any?
 
+    private var spec: String { model.shortcuts[def.id] ?? def.defaultSpec }
+
     var body: some View {
         HStack(spacing: 6) {
+            if spec != def.defaultSpec && !recording {
+                Button("Reset") { model.setShortcut(def.id, def.defaultSpec) }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
+            }
             Button(action: { recording ? stop() : start() }) {
-                Text(recording ? "Press keys…" : (HotKey.parse(model.hotkey)?.display ?? "None"))
+                Text(recording ? "Press keys…" : (HotKey.parse(spec)?.display ?? "None"))
                     .font(.system(.body, design: .rounded).weight(.medium))
-                    .frame(minWidth: 96)
+                    .frame(minWidth: 84)
             }
             .buttonStyle(.bordered)
             .tint(recording ? .accentColor : nil)
-            if model.hotkey != Settings.defaultHotkey && !recording {
-                Button("Reset") { model.setHotkey(Settings.defaultHotkey) }
-                    .buttonStyle(.borderless)
-            }
         }
         .onDisappear(perform: stop)
     }
@@ -641,7 +829,8 @@ struct ShortcutRecorder: View {
             if let spec = HotKey.spec(from: event) {
                 recording = false
                 removeMonitor()
-                model.setHotkey(spec)
+                model.setShortcut(def.id, spec)
+                _ = model.applyShortcuts()
             } else {
                 NSSound.beep()
             }
@@ -653,7 +842,7 @@ struct ShortcutRecorder: View {
         guard recording else { return }
         recording = false
         removeMonitor()
-        _ = model.applyHotkey()
+        _ = model.applyShortcuts()
     }
 
     private func removeMonitor() {
@@ -662,16 +851,25 @@ struct ShortcutRecorder: View {
     }
 }
 
-struct SettingsView: View {
+struct ShortcutRow: View {
+    @ObservedObject var model: SettingsModel
+    let def: ShortcutDef
+
+    var body: some View {
+        LabeledContent(def.title) { ShortcutRecorder(model: model, def: def) }
+        if let problem = model.shortcutProblems[def.id] {
+            Text(problem).font(.callout).foregroundStyle(.red)
+        }
+    }
+}
+
+struct GeneralSettings: View {
     @ObservedObject var model: SettingsModel
 
     var body: some View {
         Form {
             Section {
-                LabeledContent("Show / hide shortcut") { ShortcutRecorder(model: model) }
-                if let problem = model.hotkeyProblem {
-                    Text(problem).font(.callout).foregroundStyle(.red)
-                }
+                ShortcutRow(model: model, def: ShortcutDef.all[0])
                 Toggle("Keep on top of other windows", isOn: Binding(get: { model.pinned }, set: model.setPinned))
                 Toggle("Launch at login", isOn: Binding(get: { model.launchAtLogin }, set: model.setLaunchAtLogin))
                 if let problem = model.loginProblem {
@@ -731,15 +929,57 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 460)
-        .fixedSize(horizontal: false, vertical: true)
         .onAppear(perform: model.checkConnection)
+    }
+}
+
+struct ShortcutSettings: View {
+    @ObservedObject var model: SettingsModel
+
+    var body: some View {
+        Form {
+            ForEach(ShortcutDef.groups, id: \.self) { group in
+                Section(group) {
+                    ForEach(ShortcutDef.all.filter { $0.group == group }, id: \.id) { def in
+                        ShortcutRow(model: model, def: def)
+                    }
+                }
+            }
+            Section {
+                ForEach(ShortcutDef.builtIn, id: \.0) { title, keys in
+                    LabeledContent(title) { Text(keys).foregroundStyle(.secondary).font(.system(.body, design: .rounded)) }
+                }
+            } header: {
+                Text("Built in")
+            } footer: {
+                Text("Click a shortcut, then press the new keys. Esc cancels.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+            Section {
+                Button("Reset All Shortcuts", role: .destructive, action: model.resetAllShortcuts)
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+struct SettingsView: View {
+    @ObservedObject var model: SettingsModel
+
+    var body: some View {
+        TabView {
+            GeneralSettings(model: model)
+                .tabItem { Label("General", systemImage: "gearshape") }
+            ShortcutSettings(model: model)
+                .tabItem { Label("Shortcuts", systemImage: "keyboard") }
+        }
+        .frame(width: 480, height: 620)
     }
 }
 
 // MARK: - App
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var journal: JournalWindow!
     private var hotKey: HotKey?
     private var flushed = false
@@ -755,7 +995,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ n: Notification) {
         journal = JournalWindow()
-        settings.applyHotkey = { [weak self] in self?.registerHotKey() ?? false }
+        settings.applyShortcuts = { [weak self] in self?.applyShortcuts() ?? false }
         settings.pauseHotkey = { [weak self] in self?.hotKey = nil }
         settings.applyAppearance = { [weak self] in self?.journal.applyAppearance(); self?.refreshMenu() }
         settings.applyPinned = { [weak self] in self?.journal.applyPinned(); self?.refreshMenu() }
@@ -763,13 +1003,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.addObserver(forName: Settings.changed, object: nil, queue: .main) { [weak self] _ in
             self?.refreshMenu()
         }
-        _ = registerHotKey()
-        buildMainMenu()
+        _ = applyShortcuts()
         journal.show()
     }
 
+    /// Re-registers the global hotkey and rebuilds the menus and editor keymap from the current
+    /// shortcuts. Returns false if the global hotkey couldn't be registered.
     @discardableResult
-    private func registerHotKey() -> Bool {
+    private func applyShortcuts() -> Bool {
         hotKey = nil
         hotKey = HotKey(Settings.hotkey) { [weak self] in
             guard let self else { return }
@@ -777,7 +1018,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.hotkeyShowed = !self.journal.isShown
             self.journal.toggle()
         }
-        refreshMenu()
+        buildMainMenu()
+        journal.pushShortcuts()
         return hotKey != nil
     }
 
@@ -837,12 +1079,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func showJournal() { journal.show() }
     @objc func hideJournal() { journal.hide() }
     @objc func togglePinned() { journal.togglePinned() }
-    @objc func openInHeptabase() { journal.openInHeptabase() }
     @objc func biggerText() { journal.adjustFont(by: 0.1) }
     @objc func smallerText() { journal.adjustFont(by: -0.1) }
     @objc func resetText() { journal.adjustFont(by: nil) }
     @objc func openGitHub() { NSWorkspace.shared.open(URL(string: "https://github.com/madeyexz/heptafloat")!) }
     @objc func reportIssue() { NSWorkspace.shared.open(URL(string: "https://github.com/madeyexz/heptafloat/issues/new")!) }
+
+    /// Card and editor commands run in the editor; the card comes forward first if needed.
+    @objc func runCommand(_ item: NSMenuItem) {
+        guard let name = item.representedObject as? String else { return }
+        if !journal.isShown { journal.show() }
+        journal.command(name)
+    }
 
     /// ⌘W closes Settings when it's in front, otherwise hides the card.
     @objc func closeWindow() {
@@ -860,6 +1108,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func setAppearance(_ item: NSMenuItem) {
         guard let a = item.representedObject as? String, let appearance = Appearance(rawValue: a) else { return }
         settings.setAppearance(appearance)
+    }
+
+    /// Editing commands only apply while the card is the key window (not in Settings).
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(runCommand(_:)), item.tag == 1 { return NSApp.keyWindow === journal.panel }
+        return true
     }
 
     // MARK: menus
@@ -886,17 +1140,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             item.target = target ?? self
             return item
         }
+        /// A menu item whose keys come from the shortcut registry.
+        func shortcut(_ m: NSMenu, _ id: String, _ title: String? = nil, action: Selector? = nil) -> NSMenuItem {
+            let def = ShortcutDef.all.first { $0.id == id }!
+            let (key, mods) = ShortcutDef.menuKey(ShortcutDef.spec(id))
+            let item = add(m, title ?? def.title, action ?? #selector(runCommand(_:)), key, mods)
+            item.representedObject = id
+            item.tag = def.scope == .editor ? 1 : 0
+            return item
+        }
 
         _ = menu("HeptaFloat") { m in
             _ = add(m, "About HeptaFloat", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), target: NSApp)
             m.addItem(.separator())
-            _ = add(m, "Settings…", #selector(showSettings), ",")
+            _ = shortcut(m, "settings", "Settings…", action: #selector(showSettings))
             m.addItem(.separator())
             _ = add(m, "Hide HeptaFloat", #selector(hideJournal), "h")
             _ = add(m, "Quit HeptaFloat", #selector(NSApplication.terminate(_:)), "q", target: NSApp)
         }
         _ = menu("File") { m in
-            _ = add(m, "Open in Heptabase", #selector(openInHeptabase), "o")
+            _ = shortcut(m, "search", "Search Cards…")
+            _ = shortcut(m, "recent", "Recent Cards…")
+            _ = shortcut(m, "today", "Today's Journal")
+            m.addItem(.separator())
+            _ = shortcut(m, "openInHeptabase")
             m.addItem(.separator())
             _ = add(m, "Close", #selector(closeWindow), "w")
         }
@@ -909,8 +1176,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 m.addItem(withTitle: title, action: action, keyEquivalent: key) // first responder
             }
         }
+        _ = menu("Format") { m in
+            for id in ["bold", "italic", "underline", "strike", "code", "link", "highlight"] { _ = shortcut(m, id) }
+            m.addItem(.separator())
+            for id in ["paragraph", "heading1", "heading2", "heading3", "toggleTodo"] { _ = shortcut(m, id) }
+        }
         _ = menu("View") { m in
-            pinItem = add(m, "Keep on Top", #selector(togglePinned), "p", [.command, .shift])
+            pinItem = shortcut(m, "keepOnTop", "Keep on Top", action: #selector(togglePinned))
             let appearance = NSMenuItem(title: "Appearance", action: nil, keyEquivalent: "")
             let sub = NSMenu()
             appearanceItems = Appearance.allCases.map { a in
@@ -921,9 +1193,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             appearance.submenu = sub
             m.addItem(appearance)
             m.addItem(.separator())
-            _ = add(m, "Bigger Text", #selector(biggerText), "=")
-            _ = add(m, "Smaller Text", #selector(smallerText), "-")
-            _ = add(m, "Actual Size", #selector(resetText), "0")
+            _ = shortcut(m, "biggerText", "Bigger Text", action: #selector(biggerText))
+            _ = shortcut(m, "smallerText", "Smaller Text", action: #selector(smallerText))
+            _ = shortcut(m, "actualSize", "Actual Size", action: #selector(resetText))
         }
         let window = menu("Window") { m in
             showItem = add(m, "Show Journal", #selector(showJournal))

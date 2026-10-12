@@ -33,6 +33,14 @@ $AB screenshot "$TMP/commands.png" >/dev/null; crop "$TMP/commands.png" "$D/scre
 fresh; $AB press Enter >/dev/null; slow "Send notes from "; $AB keyboard type "@" >/dev/null; slow "s"; sleep 1
 $AB screenshot "$TMP/mention.png" >/dev/null; crop "$TMP/mention.png" "$D/screenshot-mention.png"
 
+# ⌘P recent cards and ⌘O search (dark, like Raycast Notes)
+$AB set media dark >/dev/null
+fresh; $AB press Meta+p >/dev/null; sleep 0.6; $AB press Down >/dev/null; $AB press Down >/dev/null; sleep 0.4
+$AB screenshot "$TMP/recent.png" >/dev/null; crop "$TMP/recent.png" "$D/screenshot-recent.png"
+$AB press Escape >/dev/null; sleep 0.3; $AB press Meta+o >/dev/null; sleep 0.4; slow "smart"; sleep 0.8
+$AB screenshot "$TMP/search.png" >/dev/null; crop "$TMP/search.png" "$D/screenshot-search.png"
+$AB set media light >/dev/null
+
 # Animated demo
 fresh
 $AB record start "$TMP/demo.webm" >/dev/null; sleep 1.2

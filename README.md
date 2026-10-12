@@ -34,6 +34,7 @@ Opening Heptabase, finding today's journal, and switching back breaks your flow.
 | **Type `/` for blocks** — to-dos, headings, bullets, toggles, quotes, dividers, today's date. | **Type `@` to mention a card** from your Heptabase library. Click a mention to open it in Heptabase. |
 
 - **One shortcut to show and hide** — <kbd>⌃</kbd> <kbd>⌥</kbd> <kbd>J</kbd> by default; record any shortcut you like in Settings.
+- **Jump to any card** — <kbd>⌘</kbd> <kbd>O</kbd> searches your Heptabase cards, <kbd>⌘</kbd> <kbd>P</kbd> shows the cards you've opened in HeptaFloat, <kbd>⌘</kbd> <kbd>T</kbd> goes back to today.
 - **Saves as you type** and stays in sync with Heptabase both ways.
 - **Always today's page** — at midnight it moves to the new day's journal on its own.
 - **Simple settings** — shortcut, theme, text size, keep on top, launch at login, and a check that Heptabase is connected.
@@ -57,6 +58,16 @@ HeptaFloat talks to Heptabase through Heptabase's built-in **CLI** (its local co
 
 To double-check, open **HeptaFloat → Settings…** (<kbd>⌘</kbd> <kbd>,</kbd>). The **Heptabase** section shows a green **Connected** when everything is set up, or tells you what's missing (Heptabase not running, CLI turned off, …).
 
+## Jump between cards
+
+| <img src="docs/screenshot-recent.png" alt="⌘P recent cards"> | <img src="docs/screenshot-search.png" alt="⌘O search cards"> |
+|---|---|
+| **<kbd>⌘</kbd> <kbd>P</kbd> Recent cards** — the cards you've opened in HeptaFloat (its own list, kept on your Mac). Pin favorites to the top; × removes a card from the list (it never deletes anything in Heptabase). | **<kbd>⌘</kbd> <kbd>O</kbd> Search cards** — search everything in Heptabase. <kbd>↵</kbd> opens the card right here, <kbd>⌘</kbd> <kbd>↵</kbd> opens it in Heptabase. |
+
+Notes and journals open in the floating card and are editable just like today's journal; other card types (PDFs, highlights…) open in Heptabase. <kbd>⌘</kbd> <kbd>T</kbd> takes you back to today's journal.
+
+**Links to other cards:** hover or click a card mention to choose **Open here** or **Open in Heptabase**. <kbd>⌘</kbd>-click goes straight to Heptabase.
+
 ## How to use it
 
 | Do this | To |
@@ -70,7 +81,8 @@ To double-check, open **HeptaFloat → Settings…** (<kbd>⌘</kbd> <kbd>,</kbd
 | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>H</kbd> | Highlight the selection in yellow (press again to remove) |
 | <kbd>Tab</kbd> / <kbd>⇧</kbd> <kbd>Tab</kbd> | Indent / outdent a list item |
 | <kbd>⌘</kbd> <kbd>↩</kbd> | Tick or untick a to-do |
-| <kbd>⌘</kbd> <kbd>O</kbd> | Open today's journal in Heptabase |
+| <kbd>⌘</kbd> <kbd>O</kbd> / <kbd>⌘</kbd> <kbd>P</kbd> / <kbd>⌘</kbd> <kbd>T</kbd> | Search cards / recent cards / today's journal |
+| <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>O</kbd> | Open the current card in Heptabase |
 | <kbd>⌘</kbd> <kbd>=</kbd> / <kbd>⌘</kbd> <kbd>-</kbd> | Bigger / smaller text |
 
 You can also type Markdown: `- ` bullets, `1. ` numbers, `[] ` to-dos, `# ` headings, `> ` quotes, `---` dividers.
@@ -86,8 +98,11 @@ Open **HeptaFloat → Settings…** from the menu at the top-left of your screen
 - **Launch at login** — start HeptaFloat when you log in, so the shortcut always works.
 - **Theme** and **Text size**.
 - **Heptabase** — shows whether HeptaFloat can reach your journal, with **Check Again** and **Open Heptabase**.
+- **Shortcuts** tab — every keyboard shortcut in one place. Click one and press new keys to change it; HeptaFloat warns you if the keys are already taken. **Reset All Shortcuts** restores the defaults.
 
-The menus at the top of the screen have the rest: **File → Open in Heptabase**, **View → Keep on Top / Appearance / text size**, **Window → Show Journal**, and **Help**.
+<p align="center"><img src="docs/screenshot-shortcuts.png" width="420" alt="Settings → Shortcuts"></p>
+
+The menus at the top of the screen have the rest: **File** (search, recent, today, open in Heptabase), **Format** (bold, highlight, headings…), **View** (keep on top, appearance, text size), **Window**, and **Help** — each showing its current shortcut.
 
 > Using Raycast or another launcher? A launcher hotkey that opens HeptaFloat works too — press it again to hide. Just don't give the launcher and HeptaFloat's own shortcut the same keys.
 
@@ -97,7 +112,7 @@ HeptaFloat runs entirely on your Mac. It reads and saves your journal through th
 
 ## FAQ
 
-**Does it work with notes other than the journal?** Not yet — it's focused on today's journal.
+**Does it work with notes other than the journal?** Yes — press <kbd>⌘</kbd> <kbd>O</kbd> to open any note or journal and edit it in the card. Other card types open in Heptabase.
 
 **Will it mess up my journal?** HeptaFloat keeps everything it doesn't edit exactly as it was (images, embeds, colors, tables…). Each save is checked against the latest version in Heptabase, so it won't overwrite changes you made there.
 
@@ -115,6 +130,7 @@ src/schema.js        lossless ProseMirror schema for Heptabase's card format
 src/editor.js        editor state, autosave, sync, day rollover
 src/commands.js      list editing (indent, split, toggle…)
 src/menus.js         "/" menu, @ mentions, selection toolbar, placeholders
+src/palette.js       ⌘O search and ⌘P recent-card pickers
 src/index.html       styles (Heptabase theme tokens, light/dark)
 preview/             run the editor in a browser with a demo journal
 ```
