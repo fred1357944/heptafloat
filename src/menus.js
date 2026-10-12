@@ -355,3 +355,55 @@ export function placeholderPlugin() {
     },
   });
 }
+
+// MARK: caret
+
+/**
+ * Draws the text cursor ourselves. WebKit sizes the native caret to the whole line box, so with
+ * Heptabase's 1.5 line height it towers over the text (most visibly next to Chinese). This caret
+ * is centred on the characters at the cursor and sized to the font. While an input method is
+ * composing, the native caret takes over so composition stays exactly as macOS draws it.
+ */
+export function caretPlugin(container) {
+  return new Plugin({
+    view(view) {
+      const caret = document.createElement('div');
+      caret.className = 'hf-caret';
+      container.append(caret);
+      let composing = false;
+
+      const place = () => {
+        const { selection } = view.state;
+        const show = view.hasFocus() && selection.empty && !composing && selection instanceof TextSelection;
+        document.body.classList.toggle('custom-caret', show);
+        caret.style.display = show ? 'block' : 'none';
+        if (!show) return;
+        let rect;
+        try { rect = view.coordsAtPos(selection.head, selection.$head.parentOffset === 0 ? 1 : -1); } catch { return; }
+        const { node } = view.domAtPos(selection.head);
+        const el = node.nodeType === 1 ? node : node.parentElement;
+        const size = parseFloat(getComputedStyle(el).fontSize) || 17;
+        const height = Math.round(size * 1.18);
+        const box = container.getBoundingClientRect();
+        const center = (rect.top + rect.bottom) / 2;
+        caret.style.height = `${height}px`;
+        caret.style.left = `${Math.round(rect.left - box.left + container.scrollLeft)}px`;
+        caret.style.top = `${Math.round(center - height / 2 - box.top + container.scrollTop)}px`;
+        // restart the blink so the caret is solid right after it moves, as native carets are
+        caret.style.animation = 'none';
+        void caret.offsetWidth;
+        caret.style.animation = '';
+      };
+
+      const later = () => requestAnimationFrame(place);
+      view.dom.addEventListener('focus', later);
+      view.dom.addEventListener('blur', later);
+      view.dom.addEventListener('compositionstart', () => { composing = true; place(); });
+      view.dom.addEventListener('compositionend', () => { composing = false; later(); });
+      window.addEventListener('resize', later);
+      document.fonts?.ready.then(later);
+      later();
+      return { update: later, destroy() { caret.remove(); document.body.classList.remove('custom-caret'); } };
+    },
+  });
+}

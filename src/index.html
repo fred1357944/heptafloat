@@ -128,6 +128,11 @@
   img.ProseMirror-separator { display: inline !important; border: none !important; margin: 0 !important; }
   .ProseMirror-hideselection *::selection { background: transparent; }
   .ProseMirror-hideselection { caret-color: transparent; }
+  /* our own caret (see caretPlugin): the native one spans the whole 1.5× line box in WebKit */
+  body.custom-caret .ProseMirror { caret-color: transparent; }
+  .hf-caret { position: absolute; z-index: 1; width: 2px; border-radius: 1px; background: var(--active-item);
+    pointer-events: none; display: none; animation: hf-blink 1.06s steps(1, end) .53s infinite; }
+  @keyframes hf-blink { 50% { opacity: 0; } }
   .ProseMirror-selectednode { outline: 2px solid var(--active-item); outline-offset: 1px; border-radius: 4px; }
   table { border-collapse: collapse; margin: 6px 0; font-size: .92em; }
   td, th { border: 1px solid var(--border-grid); padding: 4px 8px; vertical-align: top; }

@@ -13,7 +13,7 @@ import { dropCursor } from 'prosemirror-dropcursor';
 import { gapCursor } from 'prosemirror-gapcursor';
 import { LIST_ITEMS, schemaFor, schemaCovers, serialize, titles, formatDate } from './schema.js';
 import { backspaceAtItemStart, enterInItem, lift, setChecked, sink, toggleTodo } from './commands.js';
-import { placeholderPlugin, suggestPlugin, toggleHighlight, toolbarPlugin } from './menus.js';
+import { caretPlugin, placeholderPlugin, suggestPlugin, toggleHighlight, toolbarPlugin } from './menus.js';
 import { createPalette } from './palette.js';
 
 const SAVE_DELAY = 600;
@@ -264,6 +264,7 @@ function buildPlugins(schema) {
     dropCursor({ color: 'var(--active-item)', width: 2 }),
     gapCursor(),
     placeholderPlugin(),
+    caretPlugin(el('main')),
     new Plugin({ view: () => ({ update: (v, prev) => { if (!v.state.doc.eq(prev.doc)) onLocalChange(); } }) }),
   ];
 }
@@ -495,7 +496,7 @@ async function poll() {
 
 window.hf = {
   reply(requestId, result) { waiting.get(requestId)?.(result); waiting.delete(requestId); },
-  setScale(s) { document.documentElement.style.setProperty('--scale', s); },
+  setScale(s) { document.documentElement.style.setProperty('--scale', s); if (view) view.dispatch(view.state.tr); },
   setPinned(on) { document.body.classList.toggle('pinned', on); },
   shown() { view?.focus(); poll(); },
   async flush() { if (dirty) await save(); else if (saving) await saving; return true; },
