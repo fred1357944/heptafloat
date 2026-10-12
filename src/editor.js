@@ -521,7 +521,6 @@ window.hf = {
 
 el('close').onclick = () => post({ action: 'hide' });
 el('pin').onclick = () => post({ action: 'togglePin' });
-el('settings').onclick = () => post({ action: 'settings' });
 el('open').onclick = () => openInHeptabase(current?.id);
 
 (async () => {

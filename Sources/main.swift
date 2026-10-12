@@ -384,7 +384,7 @@ final class HotKey {
 /// Web view whose top strip drags the window, so the card can sit anywhere.
 final class DragWebView: WKWebView {
     static let dragStripHeight: CGFloat = 36
-    static let buttonsWidth: CGFloat = 126
+    static let buttonsWidth: CGFloat = 100
 
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
@@ -523,13 +523,13 @@ final class JournalWindow: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         NotificationCenter.default.post(name: Settings.changed, object: nil)
     }
 
-    /// Pinned: floats above everything and stays when you click away. Unpinned: a normal window
-    /// that tucks itself away when you switch apps.
+    /// The card always floats — a normal-level window can't layer over another app's full
+    /// screen, so macOS would switch desktops instead. Pinned only decides whether it stays
+    /// open when you click into another app (see windowDidResignKey).
     func applyPinned() {
-        let pinned = Settings.pinned
-        panel.level = pinned ? .floating : .normal
-        panel.hidesOnDeactivate = !pinned
-        web.evaluateJavaScript("window.hf && window.hf.setPinned(\(pinned))")
+        panel.level = .floating
+        panel.hidesOnDeactivate = false // the card rarely makes HeptaFloat active, so this would hide it at once
+        web.evaluateJavaScript("window.hf && window.hf.setPinned(\(Settings.pinned))")
     }
 
     func applyAppearance() {

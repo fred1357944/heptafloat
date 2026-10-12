@@ -89,12 +89,12 @@ You can also type Markdown: `- ` bullets, `1. ` numbers, `[] ` to-dos, `# ` head
 
 ### Settings
 
-Click the **⚙** button at the top of the card, or press <kbd>⌘</kbd> <kbd>,</kbd> while the card is in front.
+Press <kbd>⌘</kbd> <kbd>,</kbd> while the card is in front.
 
 <p align="center"><img src="docs/screenshot-settings.png" width="420" alt="HeptaFloat Settings: shortcut, keep on top, launch at login, theme, text size, Heptabase connection"></p>
 
 - **Show / hide shortcut** — click the button and press the keys you want. <kbd>Esc</kbd> cancels, **Reset** goes back to <kbd>⌃</kbd> <kbd>⌥</kbd> <kbd>J</kbd>.
-- **Keep on top of other windows** — on: the card floats above everything. Off: it tucks away when you switch apps.
+- **Keep on top of other windows** — on: the card stays open when you click into another app. Off: it tucks away as soon as you do. Either way it floats above everything, full-screen apps included.
 - **Launch at login** — start HeptaFloat when you log in, so the shortcut always works.
 - **Theme** and **Text size**.
 - **Heptabase** — shows whether HeptaFloat can reach your journal, with **Check Again** and **Open Heptabase**.
