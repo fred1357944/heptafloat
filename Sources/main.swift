@@ -963,17 +963,24 @@ struct ShortcutSettings: View {
     }
 }
 
-struct SettingsView: View {
-    @ObservedObject var model: SettingsModel
+/// Titles the settings window after the selected tab, as Mac settings windows do.
+final class SettingsTabs: NSTabViewController {
+    override func tabView(_ tabView: NSTabView, didSelect item: NSTabViewItem?) {
+        super.tabView(tabView, didSelect: item)
+        retitle()
+    }
 
-    var body: some View {
-        TabView {
-            GeneralSettings(model: model)
-                .tabItem { Label("General", systemImage: "gearshape") }
-            ShortcutSettings(model: model)
-                .tabItem { Label("Shortcuts", systemImage: "keyboard") }
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        retitle()
+    }
+
+    /// AppKit resets the title while switching tabs, so set it once that settles.
+    private func retitle() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.tabViewItems.indices.contains(self.selectedTabViewItemIndex) else { return }
+            self.view.window?.title = self.tabViewItems[self.selectedTabViewItemIndex].label
         }
-        .frame(width: 480, height: 620)
     }
 }
 
@@ -1061,11 +1068,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     // MARK: actions
 
+    /// Standard Mac settings window: icon tabs in the toolbar, each tab its own grouped form.
     @objc func showSettings() {
         if settingsWindow == nil {
-            let window = NSWindow(contentViewController: NSHostingController(rootView: SettingsView(model: settings)))
-            window.title = "HeptaFloat Settings"
+            func tab<V: View>(_ title: String, _ symbol: String, _ view: V) -> NSTabViewItem {
+                let host = NSHostingController(rootView: view)
+                host.sizingOptions = [.preferredContentSize]
+                let item = NSTabViewItem(viewController: host)
+                item.label = title
+                item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
+                return item
+            }
+            let tabs = SettingsTabs()
+            tabs.tabStyle = .toolbar
+            tabs.addTabViewItem(tab("General", "gearshape",
+                                    GeneralSettings(model: settings).frame(width: 480).fixedSize(horizontal: false, vertical: true)))
+            tabs.addTabViewItem(tab("Shortcuts", "keyboard",
+                                    ShortcutSettings(model: settings).frame(width: 480, height: 600)))
+            let window = NSWindow(contentViewController: tabs)
             window.styleMask = [.titled, .closable]
+            window.toolbarStyle = .preference
+            window.title = "General"
             window.isReleasedWhenClosed = false
             window.level = .floating // stay above the floating card
             window.center()
