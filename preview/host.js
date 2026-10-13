@@ -107,6 +107,7 @@
         break;
       }
       case 'cardType':
+        if (window.TRASHED === m.id) { reply({ error: 'Card is trashed: ' + m.id }); break; }
         reply({ cardType: NOTES[m.id] ? 'note' : 'pdfCard', title: NOTES[m.id]?.title });
         break;
       case 'touchRecent': {
@@ -117,6 +118,7 @@
         break;
       }
       case 'save':
+        if (m.kind === 'note' && window.TRASHED === m.id) { reply({ error: "This card is in Heptabase's trash.", current: { kind: 'note', id: m.id, title: NOTES[m.id]?.title, content: docs[m.id] ?? JSON.stringify(NOTES[m.id].content), contentMd5: 'x' } }); break; }
         if (m.kind === 'note') {
           docs[m.id] = m.content;
           reply({ current: { kind: 'note', id: m.id, title: NOTES[m.id]?.title, content: m.content, contentMd5: `${m.id}-${m.content.length}` } });

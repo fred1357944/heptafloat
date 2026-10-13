@@ -93,10 +93,12 @@
   #main::-webkit-scrollbar-thumb { background: transparent; border-radius: 3px; }
   #main:hover::-webkit-scrollbar-thumb { background: var(--light-middle-grey); }
   footer { position: fixed; inset: auto 0 0 0; height: 34px; display: flex; align-items: center; justify-content: center;
-    gap: 6px; font-size: 12px; color: var(--middle-grey); pointer-events: none; font-variant-numeric: tabular-nums; }
-  #status { display: none; max-width: 70%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #status.show { display: inline; } #status.error { color: var(--text-red-editor); }
-  #count { white-space: nowrap; }
+    gap: 6px; padding: 0 16px; font-size: 12px; color: var(--middle-grey); pointer-events: none; font-variant-numeric: tabular-nums; }
+  #status.show { pointer-events: auto; } /* hover for the full message */
+  /* long messages are cut with "…" (full text on hover) instead of running off the card */
+  #status { display: none; min-width: 0; max-width: calc(100% - 150px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #status.show { display: block; } #status.error { color: var(--text-red-editor); }
+  #count { white-space: nowrap; flex: none; }
   #status.show + #count::before { content: "· "; }
 
   /* journal title */

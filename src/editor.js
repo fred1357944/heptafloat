@@ -24,14 +24,29 @@ const POLL_INTERVAL = 3000;
 
 let nextRequest = 1;
 const waiting = new Map();
+const CALL_TIMEOUT = 30_000;
+
+/** Asks the app to do something; resolves with its reply. A reply that never comes resolves as an
+ *  error after CALL_TIMEOUT, so one stuck request can't hold up every save behind it. */
 function call(action, payload = {}) {
   const id = nextRequest++;
   return new Promise((resolve) => {
-    waiting.set(id, resolve);
+    const timer = setTimeout(() => {
+      if (!waiting.has(id)) return;
+      waiting.delete(id);
+      log(`no reply to ${action} after ${CALL_TIMEOUT / 1000} s`);
+      resolve({ error: "Heptabase didn't respond" });
+    }, CALL_TIMEOUT);
+    waiting.set(id, (r) => { clearTimeout(timer); resolve(r); });
     window.webkit.messageHandlers.hf.postMessage({ ...payload, action, requestId: id });
   });
 }
 const post = (m) => window.webkit.messageHandlers.hf.postMessage(m);
+
+/** A line in ~/Library/Logs/HeptaFloat.log, for tracing what happened to a card. */
+function log(message) { post({ action: 'log', message }); }
+window.addEventListener('error', (e) => log(`error: ${e.message} at ${e.filename}:${e.lineno}`));
+window.addEventListener('unhandledrejection', (e) => log(`unhandled: ${e.reason?.stack ?? e.reason}`));
 
 async function searchCards(query) {
   const r = await call('search', { query });
@@ -213,7 +228,7 @@ async function show(target, { focusEnd = true, keepPlace = false } = {}) {
     el('main').scrollTop = 0;
   }
   view.focus();
-  if (r.kind !== 'draft') touchRecent(r, { keepPlace });
+  if (r.kind !== 'draft') { touchRecent(r, { keepPlace }); checkTrashed(target); }
   if (fromCache) {
     // shown instantly from memory; pick up anything that changed since
     readCard(target).then((fresh) => {
@@ -468,6 +483,7 @@ function endOfText(doc) {
 
 /** Footer status. Errors stay until things work again; the full text is in the tooltip. */
 function status(text, { sticky = false, error = false } = {}) {
+  if (error && text) log(`status: ${text}`);
   const s = el('status');
   s.textContent = text;
   s.title = text;
@@ -675,6 +691,7 @@ async function send(snap) {
   const firstKey = cacheKey(target);
   if (snap.generation < (generation.get(firstKey) ?? 0)) return; // already kept as a copy
   if (target.kind === 'draft' && createdFrom.has(target.id)) target = { kind: 'note', id: createdFrom.get(target.id) };
+  if (movedTo.has(cacheKey(target))) target = movedTo.get(cacheKey(target));
   const isShown = () => current && current.kind === target.kind && current.id === target.id;
   const wasDraft = target.kind === 'draft';
   const content = JSON.stringify(serialize(doc));
@@ -714,10 +731,17 @@ async function send(snap) {
     unsaved.delete(key);
     touchRecent(fresh ?? { title: el('title').textContent }, isShown() ? { keepPlace: !wasDraft } : { keepPlace: !wasDraft, card: target, doc });
     clearError();
+    log(`saved ${target.kind} ${target.id}${wasDraft ? ' (new card)' : ''}`);
     if (r.linkHere) linkHereInJournal(target.id);
     if (r.linkedInJournal) forgetJournal();
     if (r.journalError) status(`Card created, but not linked in today's journal — ${r.journalError}`, { error: true });
     else status(r.linkedInJournal || r.linkHere ? "Saved · linked in today's journal" : 'Saved');
+    return;
+  }
+
+  if (/trash/i.test(r.error ?? '')) {
+    // The card was moved to Heptabase's trash: keep what you wrote as a new card.
+    await rescueFromTrash({ target, doc: latestDoc.get(firstKey) ?? doc, shown: isShown() });
     return;
   }
 
@@ -733,6 +757,39 @@ async function send(snap) {
   status(`Not saved — ${r.error}`, { error: true });
   clearTimeout(retryTimer);
   retryTimer = setTimeout(retrySaves, 3000);
+}
+
+const movedTo = new Map(); // trashed card → the new card its text was saved to
+
+async function rescueFromTrash({ target, doc, shown }) {
+  const key = cacheKey(target);
+  generation.set(key, (generation.get(key) ?? 0) + 1); // older queued saves of it are dropped
+  post({ action: 'forgetCard', id: target.id, requestId: 0 });
+  log(`card ${target.id} is in Heptabase's trash; saving its text as a new card`);
+  const mineDoc = shown ? view.state.doc : doc;
+  const title = mineDoc.firstChild?.textContent.trim() || 'Untitled';
+  const c = await call('createNote', { title, content: JSON.stringify(serialize(mineDoc)), copy: true });
+  const id = c.current?.id ?? c.createdId;
+  if (!id) { status(`This card is in Heptabase's trash, and saving it as a new card failed — ${c.error}`, { error: true }); return; }
+  const note = { kind: 'note', id };
+  movedTo.set(key, note);
+  md5Of.set(cacheKey(note), c.current?.contentMd5 ?? '');
+  if (c.current) remember(c.current);
+  if (shown && current && cacheKey(current) === key) {
+    current = note;
+    if (dirty) scheduleSave(0); // anything typed since goes to the new card
+  }
+  post({ action: 'touchRecent', id, objectType: 'note', title: c.current?.title || title, chars: [...mineDoc.textContent].length });
+  status("That card was in Heptabase's trash — your text is saved as a new card", { sticky: true });
+}
+
+/** After opening a card: if it's in Heptabase's trash, say so (edits will become a new card). */
+async function checkTrashed(target) {
+  if (target.kind !== 'note') return;
+  const info = await call('cardType', { id: target.id });
+  if (!/trash/i.test(info.error ?? '') || !current || cacheKey(current) !== cacheKey(target)) return;
+  post({ action: 'forgetCard', id: target.id, requestId: 0 });
+  status("This card is in Heptabase's trash — anything you type is saved as a new card", { sticky: true });
 }
 
 function retrySaves() {

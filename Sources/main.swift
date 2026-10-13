@@ -41,7 +41,10 @@ enum Heptabase {
         let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         // Errors come back as JSON on stdout or stderr: {"error": "..."}
         let errObj = (try? JSONSerialization.jsonObject(with: errData)) as? [String: Any]
-        if let e = obj?["error"] ?? errObj?["error"] { throw Failure(message: friendly("\(e)")) }
+        if let e = obj?["error"] ?? errObj?["error"] {
+            AppLog.write("heptabase \(args.prefix(2).joined(separator: " ")) failed: \(e)")
+            throw Failure(message: friendly("\(e)"))
+        }
         guard p.terminationStatus == 0, let obj else {
             let msg = String(data: errData.isEmpty ? data : errData, encoding: .utf8) ?? ""
             throw Failure(message: friendly(msg))
@@ -60,6 +63,7 @@ enum Heptabase {
         if lower.contains("enable cli") || lower.contains("register cli") || lower.contains("runtime was not found") {
             return "Heptabase's CLI is off — turn it on in Heptabase → Settings → AI Features."
         }
+        if lower.contains("trashed") { return "This card is in Heptabase's trash." }
         if lower.contains("md5") || lower.contains("conflict") { return "Changed in Heptabase since the last save." }
         // Otherwise keep the first sentence.
         let first = text.split(whereSeparator: { ".\n".contains($0) }).first.map(String.init) ?? text
@@ -498,6 +502,28 @@ final class HotKey {
     }
 }
 
+// MARK: - Log
+
+/** ~/Library/Logs/HeptaFloat.log — saves, errors and status messages, for tracing problems. */
+enum AppLog {
+    static let url = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("Logs/HeptaFloat.log")
+    private static let queue = DispatchQueue(label: "heptafloat.log")
+    private static let stamp: ISO8601DateFormatter = { let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return f }()
+
+    static func write(_ message: String) {
+        let line = "\(stamp.string(from: Date())) \(message)\n"
+        queue.async {
+            // keep it small: start over past 2 MB
+            if let size = try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int, size > 2_000_000 {
+                try? FileManager.default.removeItem(at: url)
+            }
+            if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close() }
+            else { try? line.write(to: url, atomically: true, encoding: .utf8) }
+        }
+    }
+}
+
 // MARK: - Images
 
 /// Serves `hf-file://<fileId>` to the editor: images pasted in Heptabase live there as files, not URLs.
@@ -846,6 +872,8 @@ final class JournalWindow: NSObject, WKScriptMessageHandler, WKNavigationDelegat
                 let results = (try? Heptabase.searchCards(query)) ?? []
                 self.reply(requestId, ["results": results])
             }
+        case "log":
+            if let line = body["message"] as? String { AppLog.write(line) }
         case "openURL":
             if let s = body["url"] as? String, let url = URL(string: s) { NSWorkspace.shared.open(url) }
         case "hide":
@@ -1295,6 +1323,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var hotkeyShowed = false
 
     func applicationDidFinishLaunching(_ n: Notification) {
+        AppLog.write("HeptaFloat \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev") started")
         journal = JournalWindow()
         settings.applyShortcuts = { [weak self] in self?.applyShortcuts() ?? false }
         settings.pauseHotkey = { [weak self] in self?.hotKey = nil }
@@ -1405,6 +1434,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc func smallerText() { journal.adjustFont(by: -0.1) }
     @objc func resetText() { journal.adjustFont(by: nil) }
     @objc func openGitHub() { NSWorkspace.shared.open(URL(string: "https://github.com/madeyexz/heptafloat")!) }
+    @objc func showLog() { NSWorkspace.shared.activateFileViewerSelecting([AppLog.url]) }
     @objc func reportIssue() { NSWorkspace.shared.open(URL(string: "https://github.com/madeyexz/heptafloat/issues/new")!) }
 
     /// Card and editor commands run in the editor; the card comes forward first if needed.
@@ -1530,6 +1560,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let help = menu("Help") { m in
             _ = add(m, "HeptaFloat on GitHub", #selector(openGitHub))
             _ = add(m, "Report a Problem…", #selector(reportIssue))
+            _ = add(m, "Show Log File", #selector(showLog))
         }
         NSApp.helpMenu = help
         NSApp.mainMenu = main
