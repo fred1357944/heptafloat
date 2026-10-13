@@ -344,16 +344,24 @@ export function placeholderPlugin() {
     props: {
       decorations(state) {
         const { doc, selection } = state;
-        if (doc.childCount === 1 && doc.firstChild.isTextblock && doc.firstChild.content.size === 0) {
-          const ph = doc.firstChild.type.name === 'heading' ? 'Untitled' : 'Write something, or press / for commands…';
-          return DecorationSet.create(doc, [Decoration.node(0, doc.firstChild.nodeSize, { class: 'ph', 'data-ph': ph })]);
+        const decos = [];
+        // Like Heptabase: empty headings always show "Heading N"; a lone empty line shows the hint.
+        doc.descendants((node, pos) => {
+          if (node.type.name === 'heading' && node.content.size === 0) {
+            decos.push(Decoration.node(pos, pos + node.nodeSize, { class: 'ph', 'data-ph': `Heading ${node.attrs.level || 1}` }));
+          }
+          return !node.isTextblock;
+        });
+        if (doc.childCount === 1 && doc.firstChild.type.name === 'paragraph' && doc.firstChild.content.size === 0) {
+          decos.push(Decoration.node(0, doc.firstChild.nodeSize, { class: 'ph', 'data-ph': "Type '/' or '@' for commands" }));
         }
         const { $from, empty } = selection;
-        if (!empty || $from.parent.content.size > 0 || !$from.parent.isTextblock) return null;
-        const label = $from.depth > 1 && $from.node(-1).type.name.endsWith('_list_item') ? 'List'
-          : $from.parent.type.name === 'heading' ? ($from.depth === 1 && $from.index(0) === 0 ? 'Untitled' : `Heading ${$from.parent.attrs.level || 1}`)
-          : "Type '/' for commands";
-        return DecorationSet.create(doc, [Decoration.node($from.before(), $from.after(), { class: 'ph line', 'data-ph': label })]);
+        if (empty && $from.parent.isTextblock && $from.parent.content.size === 0 && $from.parent.type.name !== 'heading'
+            && !(doc.childCount === 1 && $from.depth === 1)) {
+          const label = $from.depth > 1 && $from.node(-1).type.name.endsWith('_list_item') ? 'List' : "Type '/' or '@' for commands";
+          decos.push(Decoration.node($from.before(), $from.after(), { class: 'ph line', 'data-ph': label }));
+        }
+        return DecorationSet.create(doc, decos);
       },
     },
   });

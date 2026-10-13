@@ -105,7 +105,8 @@ async function show(target, { focusEnd = true, keepPlace = false } = {}) {
   followToday = target.kind === 'journal' && target.id === today();
   applyRemote(r, { keepSelection: false });
   if (r.kind === 'draft') {
-    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 1))); // in the title line
+    // like Heptabase's new card: "Heading 1" above, cursor on the first line of the body
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, view.state.doc.firstChild.nodeSize + 1)));
   } else if (focusEnd) {
     view.dispatch(view.state.tr.setSelection(endOfText(view.state.doc)).scrollIntoView());
     el('main').scrollTop = 0;
@@ -121,7 +122,7 @@ async function show(target, { focusEnd = true, keepPlace = false } = {}) {
 function newDraft() {
   return {
     kind: 'draft', id: `draft-${Date.now()}`, title: '', contentMd5: null,
-    content: JSON.stringify({ type: 'doc', content: [{ type: 'heading', attrs: { level: 1 } }] }),
+    content: JSON.stringify({ type: 'doc', content: [{ type: 'heading', attrs: { level: 1 } }, { type: 'paragraph' }] }),
   };
 }
 
