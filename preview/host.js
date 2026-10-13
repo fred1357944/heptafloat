@@ -51,7 +51,9 @@
       const d = new Date(), iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
       content = (await (await fetch('demo-journal.json')).text()).replaceAll('__TODAY__', iso);
     }
-    const reply = (r) => setTimeout(() => window.hf.reply(m.requestId, r), 15);
+    // ?latency=250 makes reads as slow as the real CLI
+    const delay = m.action === 'read' ? Number(new URLSearchParams(location.search).get('latency') || 15) : 15;
+    const reply = (r) => setTimeout(() => window.hf.reply(m.requestId, r), delay);
     switch (m.action) {
       case 'setupStatus':
         reply(window.SETUP ?? { step: 'ready' });

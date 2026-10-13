@@ -82,24 +82,60 @@ async function openHere(card) {
 
 // ⌘[ / ⌘] walk the Recent list (the same order as ⌘P), like Raycast Notes. Cards reached this way
 // keep their place in the list, so repeated presses keep moving instead of bouncing between two.
-async function step(direction) { // +1 = older (down the list), -1 = newer
+let recentList = null;  // the ⌘P order, refreshed in the background
+let navTarget = null;   // where a ⌘[ / ⌘] press is heading, so quick repeats keep moving
+let navSeq = 0;         // the newest navigation wins; older ones stop before rendering
+
+async function loadRecentList() {
   const cards = (await call('recents')).cards || [];
-  const list = [...cards.filter((c) => c.pinned), ...cards.filter((c) => !c.pinned)]; // as grouped in ⌘P
-  const i = list.findIndex((c) => c.id === current?.id);
-  // skip cards the card can't show (e.g. PDFs)
-  for (let j = i < 0 ? (direction > 0 ? 0 : -1) : i + direction; j >= 0 && j < list.length; j += direction) {
-    const kind = editableKind(list[j].objectType, list[j].id);
-    if (kind) { await show({ kind, id: list[j].id }, { keepPlace: true }); return; }
-  }
+  recentList = [...cards.filter((c) => c.pinned), ...cards.filter((c) => !c.pinned)]; // as grouped in ⌘P
+  return recentList;
 }
+
+/** The nearest card in the list (from index i, going `direction`) that the card can show. */
+function nextShowable(list, i, direction) {
+  for (let j = i; j >= 0 && j < list.length; j += direction) {
+    const kind = editableKind(list[j].objectType, list[j].id);
+    if (kind) return { kind, id: list[j].id, index: j };
+  }
+  return null;
+}
+
+async function step(direction) { // +1 = older (down the list), -1 = newer
+  const list = recentList ?? await loadRecentList();
+  const from = navTarget?.id ?? current?.id;
+  const i = list.findIndex((c) => c.id === from);
+  const target = nextShowable(list, i < 0 ? (direction > 0 ? 0 : list.length - 1) : i + direction, direction);
+  if (!target) return;
+  navTarget = target;
+  await show(target, { keepPlace: true });
+  if (navTarget === target) navTarget = null;
+  // warm up the next stops in both directions
+  for (const d of [1, -1]) { const n = nextShowable(list, target.index + d, d); if (n) prefetch(n); }
+  loadRecentList();
+}
+
+// Recently read cards, so switching to one is instant; it's refreshed right after showing.
+const cardCache = new Map();
+const cacheKey = (t) => `${t.kind}:${t.id}`;
+function remember(r) { if (r && !r.error && r.kind && r.kind !== 'draft') cardCache.set(cacheKey(r), r); }
+async function readCard(target) { const r = await call('read', target); remember(r); return r; }
+function prefetch(target) { if (!cardCache.has(cacheKey(target))) readCard(target); }
 
 /** Switches the editor to another card, saving the current one first. */
 async function show(target, { focusEnd = true, keepPlace = false } = {}) {
   if (current && target.kind === current.kind && target.id === current.id) { view?.focus(); return; }
   if (target.kind === 'draft' && current?.kind === 'draft' && !dirty) { view?.focus(); return; }
+  const seq = ++navSeq;
   if (dirty) await save();
   else if (saving) await saving;
-  const r = target.kind === 'draft' ? newDraft() : await call('read', target);
+  if (seq !== navSeq) return;
+  let r = target.kind === 'draft' ? newDraft() : cardCache.get(cacheKey(target));
+  const fromCache = !!r && target.kind !== 'draft';
+  if (!r) {
+    r = await readCard(target);
+    if (seq !== navSeq) return;
+  }
   if (r.error) { status(r.error, { error: true }); return; }
   clearError();
   followToday = target.kind === 'journal' && target.id === today();
@@ -113,6 +149,13 @@ async function show(target, { focusEnd = true, keepPlace = false } = {}) {
   }
   view.focus();
   if (r.kind !== 'draft') touchRecent(r, { keepPlace });
+  if (fromCache) {
+    // shown instantly from memory; pick up anything that changed since
+    readCard(target).then((fresh) => {
+      if (fresh.error || current?.id !== fresh.id || dirty || saving) return;
+      if (fresh.contentMd5 !== baseMd5) applyRemote(fresh);
+    });
+  }
 }
 
 /**
@@ -521,6 +564,7 @@ async function save() {
         el('title').textContent = r.current.title || 'Untitled';
         document.body.dataset.kind = 'note';
       }
+      remember(r.current);
       if (stillShown) { baseMd5 = r.current.contentMd5; adoptIds(doc, r.current); touchRecent(r.current, { keepPlace: target.kind !== 'draft' }); }
       clearError();
       if (r.journalError) status(`Card created, but not linked in today's journal — ${r.journalError}`, { error: true });
@@ -565,6 +609,7 @@ function adoptIds(savedDoc, cur) {
 
 function applyRemote(result, opts = { keepSelection: true }) {
   if (!result) return;
+  remember(result);
   loadingRemote = true;
   load(result, opts);
   loadingRemote = false;
@@ -638,6 +683,11 @@ function start(r) {
   // Start at the end of the journal, ready to write; wait for Inter so the measurement holds.
   document.fonts.ready.then(() => view.dispatch(view.state.tr.scrollIntoView()));
   setInterval(poll, POLL_INTERVAL);
+  // warm the cache with the first few Recent cards, so ⌘[ is instant from the start
+  loadRecentList().then((list) => {
+    let i = 0;
+    for (let n = 0; n < 3; n++) { const t = nextShowable(list, i, 1); if (!t) break; prefetch(t); i = t.index + 1; }
+  });
   window.addEventListener('focus', poll);
   // Mark images Heptabase couldn't hand over (e.g. not synced to this Mac yet) instead of a broken icon.
   document.addEventListener('error', (e) => {

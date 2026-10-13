@@ -17,6 +17,10 @@ enum Heptabase {
 
     /// Writes and polls run one at a time so a poll never races a save.
     static let queue = DispatchQueue(label: "heptafloat.cli")
+    /// Reads run in parallel and never wait behind a save or a title lookup (each CLI call is ~250 ms).
+    static let readQueue = DispatchQueue(label: "heptafloat.read", qos: .userInitiated, attributes: .concurrent)
+    /// Mention-title lookups, one at a time, in the background.
+    static let titleQueue = DispatchQueue(label: "heptafloat.titles", qos: .utility)
     /// Searches run alongside, so typing in the mention menu never waits behind a save.
     static let searchQueue = DispatchQueue(label: "heptafloat.search")
 
@@ -171,7 +175,7 @@ enum Heptabase {
 
     private static var titleCache: [String: String] = [:]
 
-    /// Titles of cards mentioned in a document, for mention chips. Call on `queue`.
+    /// Titles of cards mentioned in a document, for mention chips. Call on `titleQueue`.
     static func mentionTitles(in docJSON: String) -> [String: String] {
         guard let data = docJSON.data(using: .utf8),
               let root = try? JSONSerialization.jsonObject(with: data) else { return [:] }
@@ -688,7 +692,7 @@ final class JournalWindow: NSObject, WKScriptMessageHandler, WKNavigationDelegat
     }
 
     private func pushTitles(for content: String) {
-        Heptabase.queue.async {
+        Heptabase.titleQueue.async {
             let titles = Heptabase.mentionTitles(in: content)
             guard !titles.isEmpty, let data = try? JSONSerialization.data(withJSONObject: titles),
                   let json = String(data: data, encoding: .utf8) else { return }
@@ -706,7 +710,7 @@ final class JournalWindow: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         switch action {
         case "read":
             guard let kind = Heptabase.Kind(rawValue: body["kind"] as? String ?? ""), let id = body["id"] as? String else { return }
-            Heptabase.queue.async {
+            Heptabase.readQueue.async {
                 do {
                     let r = try Heptabase.read(kind, id)
                     self.reply(requestId, r)
