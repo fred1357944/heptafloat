@@ -115,11 +115,30 @@ async function step(direction) { // +1 = older (down the list), -1 = newer
   loadRecentList();
 }
 
-// Recently read cards, so switching to one is instant; it's refreshed right after showing.
+// Recently read cards (most recent last, at most CACHE_SIZE), so switching to one is instant;
+// it's refreshed right after showing.
+const CACHE_SIZE = 30;
 const cardCache = new Map();
 const cacheKey = (t) => `${t.kind}:${t.id}`;
-function remember(r) { if (r && !r.error && r.kind && r.kind !== 'draft') cardCache.set(cacheKey(r), r); }
-async function readCard(target) { const r = await call('read', target); remember(r); return r; }
+function remember(r) {
+  if (!r || r.error || !r.kind || r.kind === 'draft') return;
+  const key = cacheKey(r);
+  cardCache.delete(key);
+  cardCache.set(key, r);
+  if (cardCache.size > CACHE_SIZE) cardCache.delete(cardCache.keys().next().value);
+}
+
+// Reads run alongside saves, so a read that started before a save of the same card can come
+// back with the older version. Each save bumps its card's counter; a read that sees the counter
+// change while it was in flight is marked stale and never shown or cached.
+const saveCounts = new Map();
+async function readCard(target) {
+  const key = cacheKey(target), before = saveCounts.get(key) ?? 0;
+  const r = await call('read', target);
+  if ((saveCounts.get(key) ?? 0) !== before) return { ...r, stale: true };
+  remember(r);
+  return r;
+}
 function prefetch(target) { if (!cardCache.has(cacheKey(target))) readCard(target); }
 
 /** Switches the editor to another card, saving the current one first. */
@@ -133,7 +152,7 @@ async function show(target, { focusEnd = true, keepPlace = false } = {}) {
   let r = target.kind === 'draft' ? newDraft() : cardCache.get(cacheKey(target));
   const fromCache = !!r && target.kind !== 'draft';
   if (!r) {
-    r = await readCard(target);
+    do r = await readCard(target); while (r.stale);
     if (seq !== navSeq) return;
   }
   if (r.error) { status(r.error, { error: true }); return; }
@@ -152,7 +171,7 @@ async function show(target, { focusEnd = true, keepPlace = false } = {}) {
   if (fromCache) {
     // shown instantly from memory; pick up anything that changed since
     readCard(target).then((fresh) => {
-      if (fresh.error || current?.id !== fresh.id || dirty || saving) return;
+      if (fresh.error || fresh.stale || current?.id !== fresh.id || dirty || saving) return;
       if (fresh.contentMd5 !== baseMd5) applyRemote(fresh);
     });
   }
@@ -550,6 +569,7 @@ async function save() {
   const doc = view.state.doc, target = { ...current };
   const content = JSON.stringify(serialize(doc));
   dirty = false;
+  saveCounts.set(cacheKey(target), (saveCounts.get(cacheKey(target)) ?? 0) + 1);
   status('Saving…', { sticky: true });
   // A ⌘N draft becomes a real note on its first save.
   const request = target.kind === 'draft'
@@ -620,10 +640,10 @@ async function poll() {
   // Showing today's journal: follow the date across midnight.
   if (followToday && current.id !== today()) { show({ kind: 'journal', id: today() }); return; }
   const target = { ...current };
-  const r = await call('read', target);
+  const r = await readCard(target);
   if (r.error) { status(r.error, { error: true }); return; }
   clearError();
-  if (dirty || saving || current.id !== target.id) return;
+  if (r.stale || dirty || saving || current.id !== target.id) return;
   if (r.contentMd5 !== baseMd5) applyRemote(r);
 }
 
