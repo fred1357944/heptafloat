@@ -106,6 +106,7 @@ Press <kbd>⌘</kbd> <kbd>,</kbd> while the card is in front.
 
 <p align="center"><img src="docs/screenshot-shortcuts.png" width="420" alt="Settings → Shortcuts"></p>
 
+- **Add new cards to today's journal** — off by default. When on, every card you start with <kbd>⌘</kbd> <kbd>N</kbd> is linked at the end of today's journal, so it's easy to find later.
 - **Show in Dock and menu bar** — off by default. HeptaFloat then works like Raycast: no Dock icon, and the card pops up on whatever screen you're on — over full-screen apps too — without ever switching desktops. Turn it on to get a Dock icon and the menus at the top of the screen (File, Format, View, Window, Help), at the cost that opening HeptaFloat from a launcher can switch desktops.
 - **Quit HeptaFloat** is at the bottom of Settings (or press <kbd>⌘</kbd> <kbd>Q</kbd> while the card is in front).
 

@@ -505,7 +505,8 @@ async function save() {
       }
       if (stillShown) { baseMd5 = r.current.contentMd5; adoptIds(doc, r.current); touchRecent(r.current); }
       clearError();
-      status('Saved');
+      if (r.journalError) status(`Card created, but not linked in today's journal — ${r.journalError}`, { error: true });
+      else status(r.linkedInJournal ? "Saved · linked in today's journal" : 'Saved');
     } else if (!r.current) {
       // Heptabase unreachable: keep the edit and try again.
       dirty = stillShown;

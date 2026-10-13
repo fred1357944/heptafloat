@@ -134,6 +134,13 @@ enum Heptabase {
 
     /// Creates a note you wrote (not marked "Created by AI") and fills it with the editor's content.
     /// Returns the note as read back from Heptabase.
+    /// Links a card at the end of today's journal ({{card id}} is Heptabase's Markdown for a mention).
+    static func linkInTodaysJournal(_ cardId: String) throws {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        _ = try run(["journal", "append", formatter.string(from: Date()), "--content", "{{card \(cardId)}}"])
+    }
+
     static func createNote(title: String, content: String) throws -> [String: Any] {
         let line = title.replacingOccurrences(of: "\n", with: " ")
         let created = try run(["note", "create", "--no-created-by-ai", "--content", "# \(line.isEmpty ? "Untitled" : line)"])
@@ -219,6 +226,12 @@ enum Settings {
     }
     /// Off (default): no Dock icon or menu bar, like Raycast — opening HeptaFloat can never make
     /// macOS switch desktops or leave full screen. On: Dock icon and menus.
+    /// When on, each ⌘N card is linked at the end of today's journal as it's created.
+    static var addNewCardsToJournal: Bool {
+        get { defaults.bool(forKey: "addNewCardsToJournal") }
+        set { defaults.set(newValue, forKey: "addNewCardsToJournal") }
+    }
+
     static var showInDock: Bool {
         get { defaults.object(forKey: "showInDock") as? Bool ?? false }
         set { defaults.set(newValue, forKey: "showInDock") }
@@ -719,7 +732,16 @@ final class JournalWindow: NSObject, WKScriptMessageHandler, WKNavigationDelegat
             guard let content = body["content"] as? String else { return }
             let title = body["title"] as? String ?? ""
             Heptabase.queue.async {
-                do { self.reply(requestId, ["current": try Heptabase.createNote(title: title, content: content)]) }
+                do {
+                    let note = try Heptabase.createNote(title: title, content: content)
+                    var result: [String: Any] = ["current": note]
+                    if Settings.addNewCardsToJournal, let id = note["id"] as? String {
+                        // The card exists either way; a failed link only shows a note in the footer.
+                        do { try Heptabase.linkInTodaysJournal(id); result["linkedInJournal"] = true }
+                        catch { result["journalError"] = Self.message(error) }
+                    }
+                    self.reply(requestId, result)
+                }
                 catch { self.reply(requestId, ["error": Self.message(error)]) }
             }
         case "cardType":
@@ -857,6 +879,7 @@ final class SettingsModel: ObservableObject {
     @Published var fontScale = Settings.fontScale
     @Published var launchAtLogin = SMAppService.mainApp.status == .enabled
     @Published var showInDock = Settings.showInDock
+    @Published var addNewCardsToJournal = Settings.addNewCardsToJournal
     @Published var loginProblem: String?
     @Published var connection = ConnectionStatus.checking
     @Published var shortcuts: [String: String] = [:]
@@ -917,6 +940,8 @@ final class SettingsModel: ObservableObject {
     func setAppearance(_ a: Appearance) { Settings.appearance = a; appearance = a; applyAppearance() }
     func setPinned(_ on: Bool) { Settings.pinned = on; pinned = on; applyPinned() }
     func setFontScale(_ v: Double) { Settings.fontScale = v; fontScale = Settings.fontScale; applyFontScale() }
+    func setAddNewCardsToJournal(_ on: Bool) { Settings.addNewCardsToJournal = on; addNewCardsToJournal = on }
+
     func setShowInDock(_ on: Bool) {
         Settings.showInDock = on
         showInDock = on
@@ -1024,6 +1049,11 @@ struct GeneralSettings: View {
                 ShortcutRow(model: model, def: ShortcutDef.all[0])
                 Toggle("Keep on top of other windows", isOn: Binding(get: { model.pinned }, set: model.setPinned))
                 Toggle("Launch at login", isOn: Binding(get: { model.launchAtLogin }, set: model.setLaunchAtLogin))
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle("Add new cards to today's journal", isOn: Binding(get: { model.addNewCardsToJournal }, set: model.setAddNewCardsToJournal))
+                    Text("Each card you start with ⌘N gets a link at the end of that day's journal.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
                 VStack(alignment: .leading, spacing: 4) {
                     Toggle("Show in Dock and menu bar", isOn: Binding(get: { model.showInDock }, set: model.setShowInDock))
                     Text(model.showInDock
