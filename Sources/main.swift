@@ -6,6 +6,7 @@ import AppKit
 import Carbon.HIToolbox
 import ServiceManagement
 import SwiftUI
+import UniformTypeIdentifiers
 import WebKit
 
 // MARK: - Heptabase CLI
@@ -79,6 +80,56 @@ enum Heptabase {
         try content.write(to: file, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: file) }
         _ = try run([kind.rawValue, "save", id, "--content-md5", md5, "--content-file", file.path])
+    }
+
+    // MARK: files (images stored in Heptabase)
+
+    /// Where exported Heptabase files are kept; a file ID's contents never change.
+    static let fileCache: URL = {
+        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("com.ianhsiao.heptafloat/files", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }()
+
+    private static func cached(_ fileId: String) -> URL? {
+        (try? FileManager.default.contentsOfDirectory(at: fileCache, includingPropertiesForKeys: nil))?
+            .first { $0.deletingPathExtension().lastPathComponent == fileId }
+    }
+
+    /// A Heptabase file's bytes and MIME type, exported once through the CLI and then cached.
+    static func file(_ fileId: String) throws -> (data: Data, mimeType: String) {
+        let url: URL
+        if let hit = cached(fileId) {
+            url = hit
+        } else {
+            let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("heptafloat-export-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: scratch) }
+            let r = try run(["file", "export", fileId, "--output-dir", scratch.path])
+            guard let path = r["path"] as? String else { throw Failure(message: "Heptabase didn't export the image.") }
+            let ext = URL(fileURLWithPath: path).pathExtension
+            url = fileCache.appendingPathComponent(fileId).appendingPathExtension(ext)
+            try? FileManager.default.removeItem(at: url)
+            try FileManager.default.moveItem(at: URL(fileURLWithPath: path), to: url)
+        }
+        let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
+        return (try Data(contentsOf: url), mime)
+    }
+
+    /// Imports image bytes into the workspace (streamed, so large screenshots are fine) and caches
+    /// them under the new file ID. Returns { fileId, name, mimeType, size, width, height }.
+    static func importImage(_ data: Data, name: String) throws -> [String: Any] {
+        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("heptafloat-import-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let file = scratch.appendingPathComponent(name)
+        try data.write(to: file)
+        let r = try run(["file", "import", file.path])
+        if let id = r["fileId"] as? String {
+            try? data.write(to: fileCache.appendingPathComponent(id).appendingPathExtension(file.pathExtension))
+        }
+        return r
     }
 
     /// The card's type ("note", "journal", "pdfCard", …), to decide whether HeptaFloat can open it.
@@ -379,6 +430,40 @@ final class HotKey {
     }
 }
 
+// MARK: - Images
+
+/// Serves `hf-file://<fileId>` to the editor: images pasted in Heptabase live there as files, not URLs.
+final class HeptabaseFileScheme: NSObject, WKURLSchemeHandler {
+    static let scheme = "hf-file"
+    private let queue = DispatchQueue(label: "heptafloat.files", attributes: .concurrent)
+    private var stopped = Set<ObjectIdentifier>()
+
+    func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {
+        guard let url = task.request.url, let id = url.host, UUID(uuidString: id) != nil else {
+            task.didFailWithError(URLError(.badURL)); return
+        }
+        let key = ObjectIdentifier(task)
+        queue.async {
+            let result = Result { try Heptabase.file(id) }
+            DispatchQueue.main.async {
+                guard self.stopped.remove(key) == nil else { return }
+                switch result {
+                case .success(let file):
+                    task.didReceive(URLResponse(url: url, mimeType: file.mimeType, expectedContentLength: file.data.count, textEncodingName: nil))
+                    task.didReceive(file.data)
+                    task.didFinish()
+                case .failure(let error):
+                    task.didFailWithError(error)
+                }
+            }
+        }
+    }
+
+    func webView(_ webView: WKWebView, stop task: WKURLSchemeTask) {
+        stopped.insert(ObjectIdentifier(task))
+    }
+}
+
 // MARK: - Window
 
 /// Web view whose top strip drags the window, so the card can sit anywhere.
@@ -420,6 +505,7 @@ final class JournalWindow: NSObject, WKScriptMessageHandler, WKNavigationDelegat
                            styleMask: [.titled, .resizable, .fullSizeContentView, .closable, .nonactivatingPanel],
                            backing: .buffered, defer: false)
         let config = WKWebViewConfiguration()
+        config.setURLSchemeHandler(HeptabaseFileScheme(), forURLScheme: HeptabaseFileScheme.scheme) // the configuration keeps it
         web = DragWebView(frame: .zero, configuration: config)
         super.init()
 
@@ -609,6 +695,13 @@ final class JournalWindow: NSObject, WKScriptMessageHandler, WKNavigationDelegat
                 // Hand back what Heptabase now has: its md5 and the ids it assigned to new blocks.
                 result["current"] = try? Heptabase.read(kind, id)
                 self.reply(requestId, result)
+            }
+        case "importImage":
+            guard let base64 = body["data"] as? String, let data = Data(base64Encoded: base64) else { return }
+            let name = (body["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "Pasted image.png"
+            Heptabase.searchQueue.async {
+                do { self.reply(requestId, try Heptabase.importImage(data, name: name)) }
+                catch { self.reply(requestId, ["error": Self.message(error)]) }
             }
         case "cardType":
             guard let id = body["id"] as? String else { return }

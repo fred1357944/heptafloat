@@ -3,7 +3,7 @@
 # dist/HeptaFloat-<version>.zip for a GitHub release.
 set -e
 cd "$(dirname "$0")"
-VERSION=0.7.2
+VERSION=0.8.0
 APP=build/HeptaFloat.app
 
 rm -rf "$APP"

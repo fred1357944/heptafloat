@@ -56,8 +56,23 @@ const BASE_NODES = {
   table_header: { content: 'block+', isolating: true,
     attrs: attrs(['id', 'colspan', 'rowspan', 'colwidth', 'backgroundColor', 'textColor']),
     toDOM: (n) => ['th', { colspan: n.attrs.colspan ?? 1, rowspan: n.attrs.rowspan ?? 1 }, 0] },
-  image: blockAtom(['id', 'src', 'fileId', 'alt', 'title', 'width', 'originalHeight', 'originalWidth', 'alignment', 'reference'],
-    (n) => (n.attrs.src ? ['img', { src: n.attrs.src }] : ['div', { class: 'block-chip' }, '🖼 Image'])),
+  image: {
+    ...blockAtom(['id', 'src', 'fileId', 'alt', 'title', 'width', 'originalHeight', 'originalWidth', 'alignment', 'reference'], (n) => {
+      const { src, fileId, originalWidth: w, originalHeight: h } = n.attrs;
+      if (!src && !fileId) return ['div', { class: 'block-chip' }, '🖼 Image'];
+      // Images pasted into Heptabase are files, served to the editor by the app as hf-file://<id>.
+      return ['img', { src: src || `hf-file://${fileId}`, ...(w && h && { style: `aspect-ratio: ${w} / ${h}; width: min(100%, ${w}px)` }) }];
+    }),
+    // Images pasted as HTML (from a web page, or copied within the card).
+    parseDOM: [{
+      tag: 'img[src]',
+      getAttrs: (dom) => {
+        const src = dom.getAttribute('src');
+        const file = src.match(/^hf-file:\/\/([0-9a-f-]{36})/i);
+        return file ? { src: null, fileId: file[1], alignment: 'center' } : { src, alignment: 'center' };
+      },
+    }],
+  },
   video: blockAtom(['id', 'fileId', 'url', 'width', 'alignment', 'originalWidth', 'originalHeight', 'reference', 'source'], mediaChip('▶', 'Video')),
   audio: blockAtom(['id', 'url', 'fileId', 'reference'], mediaChip('♪', 'Audio')),
   file: blockAtom(['id', 'fileId', 'url', 'reference'], mediaChip('📎', 'File')),

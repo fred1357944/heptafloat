@@ -396,6 +396,22 @@ function load(result, { keepSelection } = {}) {
       // Keep the caret clear of the faded header and footer.
       scrollThreshold: { top: 64, bottom: 72, left: 0, right: 0 },
       scrollMargin: { top: 64, bottom: 72, left: 0, right: 0 },
+      // Pasted or dropped images are imported into Heptabase, then inserted like Heptabase does.
+      handlePaste(_v, event) {
+        const files = [...(event.clipboardData?.items || [])].filter((i) => i.kind === 'file' && i.type.startsWith('image/')).map((i) => i.getAsFile());
+        if (!files.length) return false;
+        event.preventDefault();
+        files.forEach((f) => insertImage(f));
+        return true;
+      },
+      handleDrop(_v, event) {
+        const files = [...(event.dataTransfer?.files || [])].filter((f) => f.type.startsWith('image/'));
+        if (!files.length) return false;
+        event.preventDefault();
+        const pos = view.posAtCoords({ left: event.clientX, top: event.clientY })?.pos;
+        files.forEach((f) => insertImage(f, pos));
+        return true;
+      },
       handleClickOn(_v, _pos, _node, _nodePos, event) {
         const chip = event.target.closest('.chip[data-id]');
         if (chip && chip.dataset.id) {
@@ -411,6 +427,32 @@ function load(result, { keepSelection } = {}) {
   }
   dirty = false;
   updateCount();
+}
+
+/** Uploads an image file to Heptabase (via the CLI) and inserts an image block that points to it. */
+async function insertImage(file, pos) {
+  status('Adding image…', { sticky: true });
+  const data = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(',')[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+  const ext = (file.type.split('/')[1] || 'png').replace('jpeg', 'jpg');
+  const name = file.name && file.name !== 'image.png' ? file.name : `Pasted image ${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.${ext}`;
+  const r = await call('importImage', { data, name });
+  if (r.error || !r.fileId) { status(`Couldn't add image — ${r.error || 'unknown error'}`, { error: true }); return; }
+  const node = view.state.schema.nodes.image.create({
+    src: null, fileId: r.fileId, originalWidth: r.width ?? null, originalHeight: r.height ?? null, alignment: 'center',
+  });
+  let tr;
+  if (pos == null) tr = view.state.tr.replaceSelectionWith(node);
+  else {
+    const $pos = view.state.doc.resolve(Math.min(pos, view.state.doc.content.size));
+    tr = view.state.tr.insert($pos.depth >= 1 ? $pos.after(1) : $pos.pos, node); // dropped: after the block under the pointer
+  }
+  view.dispatch(tr.scrollIntoView());
+  status('Image added');
 }
 
 function onLocalChange() {
@@ -541,4 +583,8 @@ el('open').onclick = () => openInHeptabase(current?.id);
   document.fonts.ready.then(() => view.dispatch(view.state.tr.scrollIntoView()));
   setInterval(poll, POLL_INTERVAL);
   window.addEventListener('focus', poll);
+  // Mark images Heptabase couldn't hand over (e.g. not synced to this Mac yet) instead of a broken icon.
+  document.addEventListener('error', (e) => {
+    if (e.target.tagName === 'IMG' && e.target.closest('.ProseMirror')) e.target.classList.add('missing');
+  }, true);
 })();
