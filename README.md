@@ -138,6 +138,8 @@ HeptaFloat runs entirely on your Mac. It reads and saves your journal through th
 
 **Does it work with notes other than the journal?** Yes — press <kbd>⌘</kbd> <kbd>O</kbd> to open any note or journal and edit it in the card. Other card types open in Heptabase.
 
+**What if I delete a card in Heptabase?** It disappears from HeptaFloat's Recent list too, and if it's open in the card, it closes. Anything you'd typed into it that wasn't saved yet is kept as a new card.
+
 **Will it mess up my journal?** HeptaFloat keeps everything it doesn't edit exactly as it was (images, embeds, colors, tables…). Each save is checked against the latest version in Heptabase, so it won't overwrite changes you made there.
 
 **Is this made by Heptabase?** No — it's an independent, unofficial companion app.

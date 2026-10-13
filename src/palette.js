@@ -161,6 +161,8 @@ export function createPalette(host) {
 
   return {
     open, close,
+    /** Re-reads the Recent list if it's showing (e.g. after trashed cards were removed). */
+    async reload() { if (mode === 'recent') { all = await host.recents(); showRecents(); } },
     toggle(which) { which === mode ? close() : open(which); },
     get isOpen() { return !!mode; },
   };

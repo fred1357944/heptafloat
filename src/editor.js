@@ -103,7 +103,33 @@ let navSeq = 0;         // the newest navigation wins; older ones stop before re
 async function loadRecentList() {
   const cards = (await call('recents')).cards || [];
   recentList = [...cards.filter((c) => c.pinned), ...cards.filter((c) => !c.pinned)]; // as grouped in ⌘P
+  pruneDeleted(recentList).then((gone) => { if (gone.length) { recentList = recentList.filter((c) => !gone.includes(c.id)); palette.reload(); } });
   return recentList;
+}
+
+// MARK: cards deleted in Heptabase
+//
+// A card moved to Heptabase's trash (or deleted) is gone from HeptaFloat too: it's removed from
+// Recent, and if it's open it closes (any unsaved typing is kept as a new card when it saves).
+
+const isGone = (r) => /trash|not found/i.test(r?.error ?? '');
+const goneChecked = new Map(); // card id → when it was last checked
+const TRASH_RECHECK = 60_000;
+
+/** Checks the notes in a list against Heptabase (in parallel, at most once a minute each), removes
+ *  deleted ones from Recent, and resolves with their ids. */
+async function pruneDeleted(cards, maxAge = TRASH_RECHECK) {
+  const due = cards.filter((c) => (c.objectType === 'note' || !c.objectType && !isDate(c.id))
+    && Date.now() - (goneChecked.get(c.id) ?? 0) > maxAge).slice(0, 15);
+  due.forEach((c) => goneChecked.set(c.id, Date.now()));
+  const results = await Promise.all(due.map(async (c) => (isGone(await call('cardType', { id: c.id })) ? c.id : null)));
+  const gone = results.filter(Boolean);
+  for (const id of gone) {
+    post({ action: 'forgetCard', id, requestId: 0 });
+    cardCache.delete(cacheKey({ kind: 'note', id }));
+    log(`card ${id} was deleted in Heptabase; removed from Recent`);
+  }
+  return gone;
 }
 
 /** The nearest card in the list (from index i, going `direction`) that the card can show. */
@@ -295,6 +321,7 @@ const palette = createPalette({
     const list = cards.map((c) => ({ ...c, title: c.title || (isDate(c.id) ? formatDate(c.id) : 'Untitled'), current: c.id === current?.id }));
     // Today's journal is always one keystroke away, even before it's in the history.
     if (!list.some((c) => c.id === today())) list.push({ id: today(), objectType: 'journal', title: `${formatDate(today())} · Today` });
+    pruneDeleted(cards, 3_000).then((gone) => { if (gone.length) palette.reload(); }); // drop cards deleted in Heptabase
     return list.sort((a, b) => (b.current ? 1 : 0) - (a.current ? 1 : 0));
   },
   search: searchCards,
@@ -784,12 +811,22 @@ async function rescueFromTrash({ target, doc, shown }) {
 }
 
 /** After opening a card: if it's in Heptabase's trash, say so (edits will become a new card). */
+/** If the open card was deleted in Heptabase: close it and go to today's journal. With unsaved
+ *  typing, stay — that save turns the text into a new card (rescueFromTrash). */
 async function checkTrashed(target) {
   if (target.kind !== 'note') return;
+  goneChecked.set(target.id, Date.now());
   const info = await call('cardType', { id: target.id });
-  if (!/trash/i.test(info.error ?? '') || !current || cacheKey(current) !== cacheKey(target)) return;
+  if (!isGone(info) || !current || cacheKey(current) !== cacheKey(target)) return;
   post({ action: 'forgetCard', id: target.id, requestId: 0 });
-  status("This card is in Heptabase's trash — anything you type is saved as a new card", { sticky: true });
+  cardCache.delete(cacheKey(target));
+  log(`open card ${target.id} was deleted in Heptabase`);
+  if (cardBusy(cacheKey(target))) {
+    status("This card was deleted in Heptabase — your typing will be saved as a new card", { sticky: true });
+    return;
+  }
+  await show({ kind: 'journal', id: today() });
+  status('That card was deleted in Heptabase, so it was closed', { sticky: true });
 }
 
 function retrySaves() {
@@ -863,6 +900,7 @@ async function poll() {
   // Showing today's journal: follow the date across midnight.
   if (followToday && current.id !== today()) { show({ kind: 'journal', id: today() }); return; }
   const target = { ...current };
+  if (target.kind === 'note' && Date.now() - (goneChecked.get(target.id) ?? 0) > 15_000) checkTrashed(target);
   const r = await readCard(target);
   if (r.error) { status(r.error, { error: true }); return; }
   clearError();

@@ -107,7 +107,7 @@
         break;
       }
       case 'cardType':
-        if (window.TRASHED === m.id) { reply({ error: 'Card is trashed: ' + m.id }); break; }
+        if (window.TRASHED === m.id || (window.TRASHED_ALL || []).includes(m.id)) { reply({ error: "This card is in Heptabase's trash." }); break; }
         reply({ cardType: NOTES[m.id] ? 'note' : 'pdfCard', title: NOTES[m.id]?.title });
         break;
       case 'touchRecent': {

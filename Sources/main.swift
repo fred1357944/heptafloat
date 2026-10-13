@@ -853,7 +853,7 @@ final class JournalWindow: NSObject, WKScriptMessageHandler, WKNavigationDelegat
             if let url = Heptabase.appURL { NSWorkspace.shared.open(url) }
         case "cardType":
             guard let id = body["id"] as? String else { return }
-            Heptabase.searchQueue.async {
+            Heptabase.readQueue.async { // several run at once when checking the Recent list
                 do { self.reply(requestId, try Heptabase.cardType(id)) } catch { self.reply(requestId, ["error": Self.message(error)]) }
             }
         case "recents":
