@@ -62,13 +62,13 @@ cap '<kbd>⌘P</kbd> Recent cards'
 key Meta+p; pause 1.6; slow "prod"; pause 0.8; key Enter; pause 1.8
 
 # 10. back to today
-cap '<kbd>⌘T</kbd> Back to today'
-key Meta+t; pause 1.0; f "d.getElementById('main').scrollTop = 0;"; pause 1.4
+cap '<kbd>⌘⇧D</kbd> Back to today'
+key Meta+Shift+d; pause 1.0; f "d.getElementById('main').scrollTop = 0;"; pause 1.4
 
 # ⌘N new card
 cap '<kbd>⌘N</kbd> Start a new card'
 key Meta+n; pause 1.2; slow "Weekend plans"; key Enter; slow "[] "; slow "Hike Lion's Head"; pause 1.6
-key Meta+t; pause 0.8; f "d.getElementById('main').scrollTop = 0;"; pause 0.4
+key Meta+Shift+d; pause 0.8; f "d.getElementById('main').scrollTop = 0;"; pause 0.4
 
 # 11. search
 cap '<kbd>⌘O</kbd> Search all your Heptabase cards'

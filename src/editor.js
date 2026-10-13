@@ -247,8 +247,8 @@ async function show(target, { focusEnd = true, keepPlace = false } = {}) {
   applyRemote(r, { keepSelection: false });
   if (retrying) { unsaved.delete(key); dirty = true; scheduleSave(); }
   if (r.kind === 'draft') {
-    // like Heptabase's new card: "Heading 1" above, cursor on the first line of the body
-    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, view.state.doc.firstChild.nodeSize + 1)));
+    // like Heptabase's new card: cursor on the "Heading 1" title line, body below
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 1)));
   } else if (focusEnd) {
     view.dispatch(view.state.tr.setSelection(endOfText(view.state.doc)).scrollIntoView());
     el('main').scrollTop = 0;
@@ -301,7 +301,7 @@ const bindings = {
   bold: 'Mod-b', italic: 'Mod-i', underline: 'Mod-u', strike: 'Mod-Shift-x', code: 'Mod-e', link: 'Mod-k',
   highlight: 'Mod-Shift-h', toggleTodo: 'Mod-Enter', paragraph: 'Mod-Alt-0',
   heading1: 'Mod-Alt-1', heading2: 'Mod-Alt-2', heading3: 'Mod-Alt-3',
-  pinCard: 'Mod-.', back: 'Mod-[', forward: 'Mod-]', newCard: 'Mod-n', search: 'Mod-o', recent: 'Mod-p', today: 'Mod-t', openInHeptabase: 'Mod-Shift-o',
+  pinCard: 'Mod-.', back: 'Mod-[', forward: 'Mod-]', newCard: 'Mod-n', search: 'Mod-o', recent: 'Mod-p', today: 'Mod-Shift-d', openInHeptabase: 'Mod-Shift-o',
 };
 
 /** Named commands, run from the keymap here or from the app's menus. */

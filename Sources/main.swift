@@ -349,7 +349,7 @@ struct ShortcutDef {
         .init(id: "newCard", title: "New card", group: "Cards", defaultSpec: "cmd+n", scope: .app),
         .init(id: "search", title: "Search cards", group: "Cards", defaultSpec: "cmd+o", scope: .app),
         .init(id: "recent", title: "Recent cards", group: "Cards", defaultSpec: "cmd+p", scope: .app),
-        .init(id: "today", title: "Today's journal", group: "Cards", defaultSpec: "cmd+t", scope: .app),
+        .init(id: "today", title: "Today's journal", group: "Cards", defaultSpec: "cmd+shift+d", scope: .app),
         .init(id: "pinCard", title: "Pin / unpin card", group: "Cards", defaultSpec: "cmd+.", scope: .app),
         .init(id: "back", title: "Back", group: "Cards", defaultSpec: "cmd+[", scope: .app),
         .init(id: "forward", title: "Forward", group: "Cards", defaultSpec: "cmd+]", scope: .app),
