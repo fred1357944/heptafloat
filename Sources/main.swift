@@ -83,7 +83,10 @@ enum Heptabase {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("heptafloat-\(UUID().uuidString).json")
         try content.write(to: file, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: file) }
-        _ = try run([kind.rawValue, "save", id, "--content-md5", md5, "--content-file", file.path])
+        // md5 is empty only when retrying a note HeptaFloat just created, which nothing else has
+        // touched: use its current version
+        let base = md5.isEmpty ? (try read(kind, id)["contentMd5"] as? String ?? "") : md5
+        _ = try run([kind.rawValue, "save", id, "--content-md5", base, "--content-file", file.path])
     }
 
     // MARK: files (images stored in Heptabase)
@@ -160,8 +163,6 @@ enum Heptabase {
         }
     }
 
-    /// Creates a note you wrote (not marked "Created by AI") and fills it with the editor's content.
-    /// Returns the note as read back from Heptabase.
     /// Links a card at the end of today's journal ({{card id}} is Heptabase's Markdown for a mention).
     static func linkInTodaysJournal(_ cardId: String) throws {
         let formatter = DateFormatter()
@@ -169,10 +170,16 @@ enum Heptabase {
         _ = try run(["journal", "append", formatter.string(from: Date()), "--content", "{{card \(cardId)}}"])
     }
 
-    static func createNote(title: String, content: String) throws -> [String: Any] {
+    /// Creates an empty note you wrote (not marked "Created by AI") and returns its ID.
+    static func createNote(title: String) throws -> String {
         let line = title.replacingOccurrences(of: "\n", with: " ")
         let created = try run(["note", "create", "--no-created-by-ai", "--content", "# \(line.isEmpty ? "Untitled" : line)"])
         guard let id = created["id"] as? String else { throw Failure(message: "Heptabase didn't create the note.") }
+        return id
+    }
+
+    /// Fills a note HeptaFloat just created with the editor's content; returns it as read back.
+    static func fillNote(_ id: String, content: String) throws -> [String: Any] {
         let fresh = try read(.note, id)
         try save(.note, id, content: content, md5: fresh["contentMd5"] as? String ?? "")
         return try read(.note, id)
@@ -774,18 +781,24 @@ final class JournalWindow: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         case "createNote":
             guard let content = body["content"] as? String else { return }
             let title = body["title"] as? String ?? ""
+            let linkInJournal = Settings.addNewCardsToJournal && body["copy"] as? Bool != true
             Heptabase.queue.async {
+                var result: [String: Any] = [:]
                 do {
-                    let note = try Heptabase.createNote(title: title, content: content)
-                    var result: [String: Any] = ["current": note]
-                    if Settings.addNewCardsToJournal, let id = note["id"] as? String {
+                    // Report the ID as soon as the note exists: if filling it fails, the editor
+                    // retries the fill on this note instead of creating another one.
+                    let id = try Heptabase.createNote(title: title)
+                    result["createdId"] = id
+                    if linkInJournal {
                         // The card exists either way; a failed link only shows a note in the footer.
                         do { try Heptabase.linkInTodaysJournal(id); result["linkedInJournal"] = true }
                         catch { result["journalError"] = Self.message(error) }
                     }
-                    self.reply(requestId, result)
+                    result["current"] = try Heptabase.fillNote(id, content: content)
+                } catch {
+                    result["error"] = Self.message(error)
                 }
-                catch { self.reply(requestId, ["error": Self.message(error)]) }
+                self.reply(requestId, result)
             }
         case "setupStatus":
             Heptabase.searchQueue.async { self.reply(requestId, Heptabase.setupStatus()) }

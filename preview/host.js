@@ -75,6 +75,13 @@
       }
       case 'createNote': {
         const id = `aaaaaaaa-0000-4000-8000-${String(Date.now()).slice(-12)}`;
+        window.created = (window.created || 0) + 1;
+        if (window.FAIL_FILL_ONCE) { // test hook: the note gets created, filling it fails
+          window.FAIL_FILL_ONCE = false;
+          NOTES[id] = { title: m.title, content: { type: 'doc', content: [] } };
+          reply({ createdId: id, error: 'Heptabase is busy' });
+          break;
+        }
         NOTES[id] = { title: m.title, content: JSON.parse(m.content) };
         docs[id] = m.content;
         reply({ current: { kind: 'note', id, title: m.title, content: m.content, contentMd5: `${id}-${m.content.length}` } });
@@ -95,6 +102,7 @@
           docs[m.id] = m.content;
           reply({ current: { kind: 'note', id: m.id, title: NOTES[m.id]?.title, content: m.content, contentMd5: `${m.id}-${m.content.length}` } });
         } else {
+          if (m.md5 && m.md5 !== md5) { reply({ error: 'conflict', current: { kind: 'journal', id: m.id, title, content, contentMd5: md5 } }); break; }
           content = m.content; md5 = `demo-${++saves}`;
           reply({ current: { kind: 'journal', id: m.id, title, content, contentMd5: md5 } });
         }
@@ -117,6 +125,11 @@
         break;
       default: console.log('host', m);
     }
+  };
+  // test hook: someone edits today's journal elsewhere (another device)
+  window.externalEdit = (text) => {
+    const d = JSON.parse(content); d.content.push({ type: 'paragraph', content: [{ type: 'text', text }] });
+    content = JSON.stringify(d); md5 = `demo-ext-${Date.now()}`;
   };
   // Some browsers predefine a read-only `window.webkit`, so define it rather than assign it.
   Object.defineProperty(window, 'webkit', { value: { messageHandlers: { hf: { postMessage } } }, configurable: true });

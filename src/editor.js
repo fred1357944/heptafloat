@@ -578,6 +578,12 @@ async function save() {
   saving = request.then((r) => {
     saving = null;
     const stillShown = current && current.id === target.id;
+    if (stillShown && target.kind === 'draft' && r.createdId) {
+      // The note exists now, even if filling it failed: from here on, retries save into it.
+      current = { kind: 'note', id: r.createdId };
+      document.body.dataset.kind = 'note';
+      if (r.error) baseMd5 = ''; // nothing else has touched it yet
+    }
     if (!r.error) {
       if (stillShown && target.kind === 'draft') {
         current = { kind: 'note', id: r.current.id };
@@ -595,16 +601,38 @@ async function save() {
       status(`Not saved — ${r.error}`, { error: true });
       if (stillShown) saveTimer = setTimeout(save, 3000);
     } else if (stillShown && r.current.contentMd5 !== baseMd5) {
-      // Edited in Heptabase meanwhile. Take their version unless we've typed since.
-      baseMd5 = r.current.contentMd5;
-      if (dirty) save();
-      else { status('Changed in Heptabase — reloaded'); applyRemote(r.current); }
+      // Changed in Heptabase too (another device, or right before switching apps). Keep both:
+      // save this version as a separate note, then show Heptabase's.
+      keepBoth(r.current);
     } else {
       dirty = stillShown;
       status(`Not saved — ${r.error}`, { error: true });
     }
   });
   return saving;
+}
+
+/** On a save clash: saves what's in the card (including anything typed since) as a new note,
+ *  then shows Heptabase's version of the card. Nothing is overwritten. */
+function keepBoth(theirs) {
+  const name = el('title').textContent || 'Untitled';
+  const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const title = `${name} — HeptaFloat copy ${time}`;
+  const withoutIds = (n) => ({ ...n, ...(n.attrs && 'id' in n.attrs && { attrs: { ...n.attrs, id: null } }), ...(n.content && { content: n.content.map(withoutIds) }) });
+  const mine = withoutIds(serialize(view.state.doc));
+  const copy = { type: 'doc', content: [{ type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: title }] }, ...mine.content] };
+  clearTimeout(saveTimer);
+  dirty = false;
+  applyRemote(theirs);
+  status('Changed in Heptabase too — saving your version as a copy…', { sticky: true });
+  call('createNote', { title, content: JSON.stringify(copy), copy: true }).then((c) => {
+    if (c.current) {
+      post({ action: 'touchRecent', id: c.current.id, objectType: 'note', title: c.current.title || title, chars: 0 });
+      status(`Changed in Heptabase too — your version is saved as “${title}” (⌘P)`, { sticky: true });
+    } else {
+      status(`Changed in Heptabase too, and your version couldn't be saved — ${c.error}`, { error: true });
+    }
+  });
 }
 
 /** After a save the CLI assigns ids to new blocks; copy them in so later saves keep them. */
