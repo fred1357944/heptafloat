@@ -305,6 +305,8 @@ struct ShortcutDef {
         .init(id: "search", title: "Search cards", group: "Cards", defaultSpec: "cmd+o", scope: .app),
         .init(id: "recent", title: "Recent cards", group: "Cards", defaultSpec: "cmd+p", scope: .app),
         .init(id: "today", title: "Today's journal", group: "Cards", defaultSpec: "cmd+t", scope: .app),
+        .init(id: "back", title: "Back", group: "Cards", defaultSpec: "cmd+[", scope: .app),
+        .init(id: "forward", title: "Forward", group: "Cards", defaultSpec: "cmd+]", scope: .app),
         .init(id: "openInHeptabase", title: "Open in Heptabase", group: "Cards", defaultSpec: "cmd+shift+o", scope: .app),
         .init(id: "settings", title: "Settings", group: "Window", defaultSpec: "cmd+,", scope: .app),
         .init(id: "keepOnTop", title: "Keep on top", group: "Window", defaultSpec: "cmd+shift+p", scope: .app),
@@ -1383,6 +1385,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             _ = shortcut(m, "search", "Search Cards…")
             _ = shortcut(m, "recent", "Recent Cards…")
             _ = shortcut(m, "today", "Today's Journal")
+            _ = shortcut(m, "back", "Back")
+            _ = shortcut(m, "forward", "Forward")
             m.addItem(.separator())
             _ = shortcut(m, "openInHeptabase")
             m.addItem(.separator())

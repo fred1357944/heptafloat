@@ -79,8 +79,41 @@ async function openHere(card) {
   await show({ kind, id: card.id });
 }
 
+// Back / forward through the cards opened this session (⌘[ / ⌘]), like a browser.
+const trail = { cards: [], at: -1 };
+const sameCard = (a, b) => a && b && a.kind === b.kind && a.id === b.id;
+
+/** The current card is a ⌘N draft nobody has typed in (typed drafts become notes on save). */
+function untouchedDraft() {
+  return current?.kind === 'draft' && !dirty && !saving && sameCard(trail.cards[trail.at], current);
+}
+
+function record(card) {
+  // An untouched ⌘N draft you navigate away from never became a card: forget it.
+  if (untouchedDraft()) { trail.cards.splice(trail.at, 1); trail.at--; }
+  if (sameCard(trail.cards[trail.at], card)) return;
+  trail.cards = trail.cards.slice(0, trail.at + 1);
+  trail.cards.push(card);
+  trail.at = trail.cards.length - 1;
+}
+
+async function go(step) {
+  const to = trail.at + step;
+  if (to < 0 || to >= trail.cards.length) return;
+  if (untouchedDraft()) {
+    // leaving an untouched draft: drop it, and step from where it was
+    trail.cards.splice(trail.at, 1);
+    if (step > 0) { await show(trail.cards[trail.at] ?? trail.cards[trail.at - 1], { fromTrail: true }); return; }
+    trail.at--;
+    await show(trail.cards[trail.at], { fromTrail: true });
+    return;
+  }
+  trail.at = to;
+  await show(trail.cards[to], { fromTrail: true });
+}
+
 /** Switches the editor to another card, saving the current one first. */
-async function show(target, { focusEnd = true } = {}) {
+async function show(target, { focusEnd = true, fromTrail = false } = {}) {
   if (current && target.kind === current.kind && target.id === current.id) { view?.focus(); return; }
   if (target.kind === 'draft' && current?.kind === 'draft' && !dirty) { view?.focus(); return; }
   if (dirty) await save();
@@ -88,6 +121,7 @@ async function show(target, { focusEnd = true } = {}) {
   const r = target.kind === 'draft' ? newDraft() : await call('read', target);
   if (r.error) { status(r.error, { error: true }); return; }
   clearError();
+  if (!fromTrail) record({ kind: r.kind, id: r.id });
   followToday = target.kind === 'journal' && target.id === today();
   applyRemote(r, { keepSelection: false });
   if (r.kind === 'draft') {
@@ -124,7 +158,7 @@ const bindings = {
   bold: 'Mod-b', italic: 'Mod-i', underline: 'Mod-u', strike: 'Mod-Shift-x', code: 'Mod-e', link: 'Mod-k',
   highlight: 'Mod-Shift-h', toggleTodo: 'Mod-Enter', paragraph: 'Mod-Alt-0',
   heading1: 'Mod-Alt-1', heading2: 'Mod-Alt-2', heading3: 'Mod-Alt-3',
-  newCard: 'Mod-n', search: 'Mod-o', recent: 'Mod-p', today: 'Mod-t', openInHeptabase: 'Mod-Shift-o',
+  back: 'Mod-[', forward: 'Mod-]', newCard: 'Mod-n', search: 'Mod-o', recent: 'Mod-p', today: 'Mod-t', openInHeptabase: 'Mod-Shift-o',
 };
 
 /** Named commands, run from the keymap here or from the app's menus. */
@@ -140,6 +174,8 @@ function commandFor(name, schema) {
     heading3: setBlockType(n.heading, { level: 3 }),
     search: run(() => palette.toggle('search')), recent: run(() => palette.toggle('recent')),
     newCard: run(() => show({ kind: 'draft' })),
+    back: run(() => go(-1)),
+    forward: run(() => go(1)),
     today: run(() => show({ kind: 'journal', id: today() })),
     openInHeptabase: run(() => { if (current?.kind !== 'draft') openInHeptabase(current?.id); }),
   }[name];
@@ -500,6 +536,7 @@ async function save() {
     if (!r.error) {
       if (stillShown && target.kind === 'draft') {
         current = { kind: 'note', id: r.current.id };
+        trail.cards = trail.cards.map((c) => (sameCard(c, target) ? { ...current } : c));
         el('title').textContent = r.current.title || 'Untitled';
         document.body.dataset.kind = 'note';
       }
@@ -604,6 +641,7 @@ el('open').onclick = () => openInHeptabase(current?.id);
   }
   followToday = true;
   applyRemote(r, { keepSelection: false });
+  record({ kind: r.kind, id: r.id });
   view.dispatch(view.state.tr.setSelection(endOfText(view.state.doc)));
   view.focus();
   touchRecent(r);
