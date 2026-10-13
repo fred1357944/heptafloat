@@ -132,6 +132,17 @@ enum Heptabase {
         return r
     }
 
+    /// Creates a note you wrote (not marked "Created by AI") and fills it with the editor's content.
+    /// Returns the note as read back from Heptabase.
+    static func createNote(title: String, content: String) throws -> [String: Any] {
+        let line = title.replacingOccurrences(of: "\n", with: " ")
+        let created = try run(["note", "create", "--no-created-by-ai", "--content", "# \(line.isEmpty ? "Untitled" : line)"])
+        guard let id = created["id"] as? String else { throw Failure(message: "Heptabase didn't create the note.") }
+        let fresh = try read(.note, id)
+        try save(.note, id, content: content, md5: fresh["contentMd5"] as? String ?? "")
+        return try read(.note, id)
+    }
+
     /// The card's type ("note", "journal", "pdfCard", …), to decide whether HeptaFloat can open it.
     static func cardType(_ id: String) throws -> [String: Any] {
         try run(["card", "properties", id])
@@ -277,6 +288,7 @@ struct ShortcutDef {
 
     static let all: [ShortcutDef] = [
         .init(id: "toggle", title: "Show / hide HeptaFloat", group: "Anywhere", defaultSpec: "ctrl+opt+j", scope: .global),
+        .init(id: "newCard", title: "New card", group: "Cards", defaultSpec: "cmd+n", scope: .app),
         .init(id: "search", title: "Search cards", group: "Cards", defaultSpec: "cmd+o", scope: .app),
         .init(id: "recent", title: "Recent cards", group: "Cards", defaultSpec: "cmd+p", scope: .app),
         .init(id: "today", title: "Today's journal", group: "Cards", defaultSpec: "cmd+t", scope: .app),
@@ -701,6 +713,13 @@ final class JournalWindow: NSObject, WKScriptMessageHandler, WKNavigationDelegat
             let name = (body["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "Pasted image.png"
             Heptabase.searchQueue.async {
                 do { self.reply(requestId, try Heptabase.importImage(data, name: name)) }
+                catch { self.reply(requestId, ["error": Self.message(error)]) }
+            }
+        case "createNote":
+            guard let content = body["content"] as? String else { return }
+            let title = body["title"] as? String ?? ""
+            Heptabase.queue.async {
+                do { self.reply(requestId, ["current": try Heptabase.createNote(title: title, content: content)]) }
                 catch { self.reply(requestId, ["error": Self.message(error)]) }
             }
         case "cardType":
@@ -1330,6 +1349,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             _ = add(m, "Quit HeptaFloat", #selector(NSApplication.terminate(_:)), "q", target: NSApp)
         }
         _ = menu("File") { m in
+            _ = shortcut(m, "newCard", "New Card")
             _ = shortcut(m, "search", "Search Cards…")
             _ = shortcut(m, "recent", "Recent Cards…")
             _ = shortcut(m, "today", "Today's Journal")

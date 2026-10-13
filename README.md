@@ -15,7 +15,8 @@
 </p>
 
 <p align="center">
-  <img src="docs/demo.gif" width="560" alt="Typing a to-do with the / menu, mentioning a card with @, and ticking it off">
+  <img src="docs/demo.gif" width="560" alt="Typing a to-do with the / menu, mentioning a card with @, and ticking it off"><br>
+  <a href="docs/demo-4x3.mp4"><b>▶ Watch the 1-minute tour of every feature</b></a>
 </p>
 
 ---
@@ -35,6 +36,8 @@ Opening Heptabase, finding today's journal, and switching back breaks your flow.
 
 - **One shortcut to show and hide** — <kbd>⌃</kbd> <kbd>⌥</kbd> <kbd>J</kbd> by default; record any shortcut you like in Settings.
 - **Jump to any card** — <kbd>⌘</kbd> <kbd>O</kbd> searches your Heptabase cards, <kbd>⌘</kbd> <kbd>P</kbd> shows the cards you've opened in HeptaFloat, <kbd>⌘</kbd> <kbd>T</kbd> goes back to today.
+- **New card in a keystroke** — <kbd>⌘</kbd> <kbd>N</kbd> opens a blank card, like Raycast Notes. It's created in Heptabase as soon as you type (and not at all if you don't).
+- **Images** — pictures from Heptabase show up, and you can paste or drop images into the card.
 - **Saves as you type** and stays in sync with Heptabase both ways.
 - **Always today's page** — at midnight it moves to the new day's journal on its own.
 - **Simple settings** — shortcut, theme, text size, keep on top, launch at login, and a check that Heptabase is connected.
@@ -81,6 +84,7 @@ Notes and journals open in the floating card and are editable just like today's 
 | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>H</kbd> | Highlight the selection in yellow (press again to remove) |
 | <kbd>Tab</kbd> / <kbd>⇧</kbd> <kbd>Tab</kbd> | Indent / outdent a list item |
 | <kbd>⌘</kbd> <kbd>↩</kbd> | Tick or untick a to-do |
+| <kbd>⌘</kbd> <kbd>N</kbd> | New card |
 | <kbd>⌘</kbd> <kbd>O</kbd> / <kbd>⌘</kbd> <kbd>P</kbd> / <kbd>⌘</kbd> <kbd>T</kbd> | Search cards / recent cards / today's journal |
 | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>O</kbd> | Open the current card in Heptabase |
 | <kbd>⌘</kbd> <kbd>=</kbd> / <kbd>⌘</kbd> <kbd>-</kbd> | Bigger / smaller text |

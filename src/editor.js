@@ -82,19 +82,33 @@ async function openHere(card) {
 /** Switches the editor to another card, saving the current one first. */
 async function show(target, { focusEnd = true } = {}) {
   if (current && target.kind === current.kind && target.id === current.id) { view?.focus(); return; }
+  if (target.kind === 'draft' && current?.kind === 'draft' && !dirty) { view?.focus(); return; }
   if (dirty) await save();
   else if (saving) await saving;
-  const r = await call('read', target);
+  const r = target.kind === 'draft' ? newDraft() : await call('read', target);
   if (r.error) { status(r.error, { error: true }); return; }
   clearError();
   followToday = target.kind === 'journal' && target.id === today();
   applyRemote(r, { keepSelection: false });
-  if (focusEnd) {
+  if (r.kind === 'draft') {
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 1))); // in the title line
+  } else if (focusEnd) {
     view.dispatch(view.state.tr.setSelection(endOfText(view.state.doc)).scrollIntoView());
     el('main').scrollTop = 0;
   }
   view.focus();
-  touchRecent(r);
+  if (r.kind !== 'draft') touchRecent(r);
+}
+
+/**
+ * ⌘N: a blank card with an empty title line, like Raycast Notes. Nothing is created in Heptabase
+ * until you type — the first save creates the note — so leaving it empty leaves no trace.
+ */
+function newDraft() {
+  return {
+    kind: 'draft', id: `draft-${Date.now()}`, title: '', contentMd5: null,
+    content: JSON.stringify({ type: 'doc', content: [{ type: 'heading', attrs: { level: 1 } }] }),
+  };
 }
 
 function touchRecent(r) {
@@ -110,7 +124,7 @@ const bindings = {
   bold: 'Mod-b', italic: 'Mod-i', underline: 'Mod-u', strike: 'Mod-Shift-x', code: 'Mod-e', link: 'Mod-k',
   highlight: 'Mod-Shift-h', toggleTodo: 'Mod-Enter', paragraph: 'Mod-Alt-0',
   heading1: 'Mod-Alt-1', heading2: 'Mod-Alt-2', heading3: 'Mod-Alt-3',
-  search: 'Mod-o', recent: 'Mod-p', today: 'Mod-t', openInHeptabase: 'Mod-Shift-o',
+  newCard: 'Mod-n', search: 'Mod-o', recent: 'Mod-p', today: 'Mod-t', openInHeptabase: 'Mod-Shift-o',
 };
 
 /** Named commands, run from the keymap here or from the app's menus. */
@@ -125,8 +139,9 @@ function commandFor(name, schema) {
     heading1: setBlockType(n.heading, { level: 1 }), heading2: setBlockType(n.heading, { level: 2 }),
     heading3: setBlockType(n.heading, { level: 3 }),
     search: run(() => palette.toggle('search')), recent: run(() => palette.toggle('recent')),
+    newCard: run(() => show({ kind: 'draft' })),
     today: run(() => show({ kind: 'journal', id: today() })),
-    openInHeptabase: run(() => openInHeptabase(current?.id)),
+    openInHeptabase: run(() => { if (current?.kind !== 'draft') openInHeptabase(current?.id); }),
   }[name];
 }
 
@@ -352,7 +367,10 @@ function updateCount() {
 function setTitle(result, json) {
   const title = result.title || (isDate(result.id) ? formatDate(result.id) : 'Untitled');
   el('title').textContent = title;
-  if (result.kind === 'journal') {
+  if (result.kind === 'draft') {
+    el('weekday').textContent = '';
+    el('jtitle').hidden = true; // the title line is in the card itself
+  } else if (result.kind === 'journal') {
     const [y, m, d] = result.id.split('-').map(Number);
     el('weekday').textContent = new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'long' });
     el('bigtitle').textContent = title;
@@ -472,10 +490,19 @@ async function save() {
   const content = JSON.stringify(serialize(doc));
   dirty = false;
   status('Saving…', { sticky: true });
-  saving = call('save', { ...target, content, md5: baseMd5 }).then((r) => {
+  // A ⌘N draft becomes a real note on its first save.
+  const request = target.kind === 'draft'
+    ? call('createNote', { title: doc.firstChild?.textContent.trim() || 'Untitled', content })
+    : call('save', { ...target, content, md5: baseMd5 });
+  saving = request.then((r) => {
     saving = null;
     const stillShown = current && current.id === target.id;
     if (!r.error) {
+      if (stillShown && target.kind === 'draft') {
+        current = { kind: 'note', id: r.current.id };
+        el('title').textContent = r.current.title || 'Untitled';
+        document.body.dataset.kind = 'note';
+      }
       if (stillShown) { baseMd5 = r.current.contentMd5; adoptIds(doc, r.current); touchRecent(r.current); }
       clearError();
       status('Saved');
@@ -525,7 +552,7 @@ function applyRemote(result, opts = { keepSelection: true }) {
 }
 
 async function poll() {
-  if (!current || dirty || saving || Date.now() - lastEdit < 1500) return;
+  if (!current || current.kind === 'draft' || dirty || saving || Date.now() - lastEdit < 1500) return;
   // Showing today's journal: follow the date across midnight.
   if (followToday && current.id !== today()) { show({ kind: 'journal', id: today() }); return; }
   const target = { ...current };

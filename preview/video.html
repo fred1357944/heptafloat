@@ -1,0 +1,74 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>HeptaFloat demo</title>
+<style>
+  @font-face { font-family: Inter; font-weight: 500; src: url(fonts/Inter-Medium.woff2) format("woff2"); }
+  @font-face { font-family: Inter; font-weight: 700; src: url(fonts/Inter-Bold.woff2) format("woff2"); }
+  html, body { margin: 0; width: 1200px; height: 900px; overflow: hidden; font-family: Inter, -apple-system, sans-serif; }
+  body { background: radial-gradient(120% 90% at 15% 10%, #f6c7a6 0%, transparent 55%),
+                     radial-gradient(90% 80% at 90% 20%, #b7c8ff 0%, transparent 60%),
+                     radial-gradient(100% 90% at 60% 100%, #8fb3d9 0%, transparent 60%), #dfe3ec; transition: background .6s; }
+  body.dark { background: radial-gradient(120% 90% at 15% 10%, #4b2a52 0%, transparent 55%),
+                          radial-gradient(90% 80% at 90% 20%, #1d3a6b 0%, transparent 60%),
+                          radial-gradient(100% 90% at 60% 100%, #0f4d5c 0%, transparent 60%), #14161c; }
+  /* some other app, to show the card floating on top */
+  .app { position: absolute; left: 50px; top: 50px; width: 700px; height: 660px; border-radius: 12px; background: rgba(255,255,255,.72);
+    box-shadow: 0 0 0 1px rgba(0,0,0,.08), 0 20px 60px rgba(0,0,0,.18); overflow: hidden; transition: background .6s; }
+  .dark .app { background: rgba(30,32,36,.8); }
+  .app .bar { height: 44px; display: flex; align-items: center; gap: 8px; padding: 0 16px; border-bottom: 1px solid rgba(0,0,0,.06); }
+  .app .bar i { width: 12px; height: 12px; border-radius: 50%; background: #ff5f57; } .app .bar i:nth-child(2) { background: #febc2e; } .app .bar i:nth-child(3) { background: #28c840; }
+  .app .line { height: 12px; border-radius: 6px; background: rgba(0,0,0,.07); margin: 22px 40px 0; }
+  .dark .app .line { background: rgba(255,255,255,.06); }
+  .card { position: absolute; right: 60px; top: 60px; width: 540px; height: 700px; border-radius: 12px; overflow: hidden;
+    box-shadow: 0 0 0 1px rgba(0,0,0,.12), 0 24px 70px rgba(0,0,0,.28);
+    opacity: 0; transform: translateY(10px) scale(.98); transition: opacity .25s, transform .25s; }
+  .card.show { opacity: 1; transform: none; }
+  .dark .card { box-shadow: 0 0 0 1px rgba(255,255,255,.1), 0 24px 70px rgba(0,0,0,.6); }
+  .card iframe { width: 100%; height: 100%; border: 0; display: block; }
+  /* caption */
+  .caption { position: absolute; left: 50%; bottom: 52px; transform: translateX(-50%); display: flex; align-items: center; gap: 12px;
+    padding: 12px 22px; border-radius: 999px; background: rgba(20,22,28,.86); color: #fff; font-size: 24px; font-weight: 500;
+    white-space: nowrap; box-shadow: 0 10px 30px rgba(0,0,0,.25); transition: opacity .25s; }
+  .caption kbd { font: 700 21px Inter, sans-serif; padding: 3px 10px; border-radius: 8px; background: rgba(255,255,255,.16); }
+  .caption.hide { opacity: 0; }
+  /* full-screen overlays: title, settings, end */
+  .overlay { position: absolute; inset: 0; display: grid; place-items: center; opacity: 0; pointer-events: none; transition: opacity .4s; }
+  .overlay.show { opacity: 1; }
+  .title { background: rgba(255,255,255,.8); -webkit-backdrop-filter: blur(18px); text-align: center; color: #1f2226; }
+  .dark .title { background: rgba(20,22,28,.86); color: #f2f3f5; }
+  .title img { width: 150px; }
+  .title h1 { font-size: 72px; font-weight: 700; letter-spacing: -2px; margin: 10px 0 6px; }
+  .title p { font-size: 28px; margin: 0; opacity: .75; }
+  .title .link { margin-top: 26px; font-size: 22px; font-weight: 500; opacity: .85; }
+  .settings { background: rgba(0,0,0,.18); }
+  .settings img { height: 760px; filter: drop-shadow(0 20px 50px rgba(0,0,0,.35)); }
+</style>
+</head>
+<body>
+  <div class="app"><div class="bar"><i></i><i></i><i></i></div>
+    <div class="line" style="width:40%"></div><div class="line" style="width:70%"></div><div class="line" style="width:60%"></div>
+    <div class="line" style="width:75%"></div><div class="line" style="width:50%"></div><div class="line" style="width:65%"></div>
+    <div class="line" style="width:30%"></div><div class="line" style="width:72%"></div><div class="line" style="width:58%"></div>
+  </div>
+  <div class="card" id="cardbox"><iframe id="card" src="card.html"></iframe></div>
+  <div class="caption hide" id="caption"></div>
+  <div class="overlay settings" id="settings"><img src="screenshot-shortcuts.png" alt=""></div>
+  <div class="overlay title" id="title"><div>
+    <img src="icon-1024.png" alt=""><h1>HeptaFloat</h1><p>Today's Heptabase journal, one keystroke away.</p>
+    <div class="link" id="titlelink"></div></div></div>
+<script>
+  // Driven by preview/record-demo.sh
+  window.demo = {
+    caption(html) { const c = document.getElementById('caption'); c.classList.add('hide');
+      setTimeout(() => { c.innerHTML = html; c.classList.toggle('hide', !html); }, html ? 180 : 0); },
+    card(on) { document.getElementById('cardbox').classList.toggle('show', on); },
+    overlay(id, on) { document.getElementById(id).classList.toggle('show', on); },
+    link(text) { document.getElementById('titlelink').textContent = text; },
+    dark(on) { document.body.classList.toggle('dark', on); },
+    frame() { return document.getElementById('card').contentWindow; },
+  };
+</script>
+</body>
+</html>

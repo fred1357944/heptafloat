@@ -64,6 +64,13 @@
         setTimeout(() => window.hf.titles(TITLES), 40);
         break;
       }
+      case 'createNote': {
+        const id = `aaaaaaaa-0000-4000-8000-${String(Date.now()).slice(-12)}`;
+        NOTES[id] = { title: m.title, content: JSON.parse(m.content) };
+        docs[id] = m.content;
+        reply({ current: { kind: 'note', id, title: m.title, content: m.content, contentMd5: `${id}-${m.content.length}` } });
+        break;
+      }
       case 'cardType':
         reply({ cardType: NOTES[m.id] ? 'note' : 'pdfCard', title: NOTES[m.id]?.title });
         break;

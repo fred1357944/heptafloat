@@ -345,11 +345,14 @@ export function placeholderPlugin() {
       decorations(state) {
         const { doc, selection } = state;
         if (doc.childCount === 1 && doc.firstChild.isTextblock && doc.firstChild.content.size === 0) {
-          return DecorationSet.create(doc, [Decoration.node(0, doc.firstChild.nodeSize, { class: 'ph', 'data-ph': 'Write something, or press / for commands…' })]);
+          const ph = doc.firstChild.type.name === 'heading' ? 'Untitled' : 'Write something, or press / for commands…';
+          return DecorationSet.create(doc, [Decoration.node(0, doc.firstChild.nodeSize, { class: 'ph', 'data-ph': ph })]);
         }
         const { $from, empty } = selection;
         if (!empty || $from.parent.content.size > 0 || !$from.parent.isTextblock) return null;
-        const label = $from.depth > 1 && $from.node(-1).type.name.endsWith('_list_item') ? 'List' : $from.parent.type.name === 'heading' ? `Heading ${$from.parent.attrs.level || 1}` : "Type '/' for commands";
+        const label = $from.depth > 1 && $from.node(-1).type.name.endsWith('_list_item') ? 'List'
+          : $from.parent.type.name === 'heading' ? ($from.depth === 1 && $from.index(0) === 0 ? 'Untitled' : `Heading ${$from.parent.attrs.level || 1}`)
+          : "Type '/' for commands";
         return DecorationSet.create(doc, [Decoration.node($from.before(), $from.after(), { class: 'ph line', 'data-ph': label })]);
       },
     },
