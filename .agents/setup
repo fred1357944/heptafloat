@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+# Amp's Debian base supplies these tools. The repository does not pin Bun.
+echo 'Checking orb tools'
+for tool in bun python3 uv agent-browser ffmpeg; do
+  command -v "$tool" >/dev/null || { echo "Missing orb base tool: $tool" >&2; exit 1; }
+done
+bun --version
+
+echo 'Installing locked editor dependencies'
+time bun install --frozen-lockfile
+
+# preview/capture.sh imports Pillow with the default python3 interpreter.
+echo 'Checking screenshot dependencies'
+if ! python3 -c 'from PIL import Image' 2>/dev/null; then
+  time uv pip install --python "$(command -v python3)" --system 'Pillow==11.3.0'
+fi
+
+echo 'Checking the editor bundle'
+time bun build src/editor.js --outfile build/orb/editor.js
+echo 'Orb setup ready. Native app builds require macOS and Xcode.'
