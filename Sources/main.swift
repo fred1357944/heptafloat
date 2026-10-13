@@ -1335,7 +1335,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             self?.refreshMenu()
         }
         _ = applyShortcuts()
-        journal.show()
+        // `--show-settings` opens Settings instead of the card (used to capture README screenshots)
+        if CommandLine.arguments.contains("--show-settings") { showSettings() } else { journal.show() }
     }
 
     /// Re-registers the global hotkey and rebuilds the menus and editor keymap from the current

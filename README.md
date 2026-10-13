@@ -32,15 +32,15 @@ Opening Heptabase, finding today's journal, and switching back breaks your flow.
 | <img src="docs/screenshot-light.png" alt="HeptaFloat in light mode floating over another window"> | <img src="docs/screenshot-dark.png" alt="HeptaFloat in dark mode"> |
 | **Floats above everything.** Put it anywhere on screen; it stays on top across desktops and full-screen apps. | **Looks like Heptabase.** Same font (Inter), colors, checkboxes, lists, link previews and highlights — in light and dark. |
 | <img src="docs/screenshot-commands.png" alt="The / command menu"> | <img src="docs/screenshot-mention.png" alt="Searching cards with @"> |
-| **Type `/` for blocks** — to-dos, headings, bullets, toggles, quotes, dividers, today's date. | **Type `@` to mention a card** from your Heptabase library. Click a mention to open it in Heptabase. |
+| **Type `/` for blocks** — to-dos, headings, bullets, toggles, quotes, dividers, today's date. | **Type `@` to mention a card** from your Heptabase library. Click a mention to open it here or in Heptabase. |
 
 - **One shortcut to show and hide** — <kbd>⌃</kbd> <kbd>⌥</kbd> <kbd>J</kbd> by default; record any shortcut you like in Settings.
-- **Jump to any card** — <kbd>⌘</kbd> <kbd>O</kbd> searches your Heptabase cards, <kbd>⌘</kbd> <kbd>P</kbd> shows the cards you've opened in HeptaFloat, <kbd>⌘</kbd> <kbd>T</kbd> goes back to today.
+- **Jump to any card** — <kbd>⌘</kbd> <kbd>O</kbd> searches your Heptabase cards, <kbd>⌘</kbd> <kbd>P</kbd> shows the cards you've opened in HeptaFloat, <kbd>⌘</kbd> <kbd>[</kbd> / <kbd>⌘</kbd> <kbd>]</kbd> step through them, <kbd>⌘</kbd> <kbd>.</kbd> pins one, <kbd>⌘</kbd> <kbd>T</kbd> goes back to today.
 - **New card in a keystroke** — <kbd>⌘</kbd> <kbd>N</kbd> opens a blank card, like Raycast Notes. It's created in Heptabase as soon as you type (and not at all if you don't).
 - **Images** — pictures from Heptabase show up, and you can paste or drop images into the card.
-- **Saves as you type** and stays in sync with Heptabase both ways.
+- **Saves as you type** and stays in sync with Heptabase both ways — including cards you delete there.
 - **Always today's page** — at midnight it moves to the new day's journal on its own.
-- **Simple settings** — shortcut, theme, text size, keep on top, launch at login, and a check that Heptabase is connected.
+- **Simple settings** — every shortcut, theme, text size, keep on top, launch at login, and a check that Heptabase is connected.
 
 ## Install
 
@@ -101,20 +101,21 @@ You can also type Markdown: `- ` bullets, `1. ` numbers, `[] ` to-dos, `# ` head
 
 Press <kbd>⌘</kbd> <kbd>,</kbd> while the card is in front.
 
-<p align="center"><img src="docs/screenshot-settings.png" width="420" alt="HeptaFloat Settings: shortcut, keep on top, launch at login, theme, text size, Heptabase connection"></p>
+<p align="center"><img src="docs/screenshot-settings.png" width="420" alt="HeptaFloat Settings → General: shortcut, keep on top, launch at login, add new cards to today's journal, show in Dock, theme, text size, Heptabase connection"></p>
 
-- **Show / hide shortcut** — click the button and press the keys you want. <kbd>Esc</kbd> cancels, **Reset** goes back to <kbd>⌃</kbd> <kbd>⌥</kbd> <kbd>J</kbd>.
+**General**
+- **Show / hide shortcut** — click it and press the keys you want. <kbd>Esc</kbd> cancels, **Reset** goes back to <kbd>⌃</kbd> <kbd>⌥</kbd> <kbd>J</kbd>.
 - **Keep on top of other windows** — on: the card stays open when you click into another app. Off: it tucks away as soon as you do. Either way it floats above everything, full-screen apps included.
 - **Launch at login** — start HeptaFloat when you log in, so the shortcut always works.
+- **Add new cards to today's journal** — off by default. When on, every card you start with <kbd>⌘</kbd> <kbd>N</kbd> is linked at the end of today's journal, so it's easy to find later.
+- **Show in Dock and menu bar** — off by default, so HeptaFloat works like Raycast: no Dock icon, and the card pops up on whatever screen you're on without ever switching desktops. Turn it on for a Dock icon and the menus at the top of the screen (File, Format, View, Window, Help).
 - **Theme** and **Text size**.
 - **Heptabase** — shows whether HeptaFloat can reach your journal, with **Check Again** and **Open Heptabase**.
-- **Shortcuts** tab — every keyboard shortcut in one place. Click one and press new keys to change it; HeptaFloat warns you if the keys are already taken. **Reset All Shortcuts** restores the defaults.
+- **Quit HeptaFloat** is at the bottom (or press <kbd>⌘</kbd> <kbd>Q</kbd> while the card is in front).
+
+**Shortcuts** — every keyboard shortcut in one place. Click one and press new keys to change it; HeptaFloat warns you if the keys are already taken. **Reset All Shortcuts** restores the defaults.
 
 <p align="center"><img src="docs/screenshot-shortcuts.png" width="420" alt="Settings → Shortcuts"></p>
-
-- **Add new cards to today's journal** — off by default. When on, every card you start with <kbd>⌘</kbd> <kbd>N</kbd> is linked at the end of today's journal, so it's easy to find later.
-- **Show in Dock and menu bar** — off by default. HeptaFloat then works like Raycast: no Dock icon, and the card pops up on whatever screen you're on — over full-screen apps too — without ever switching desktops. Turn it on to get a Dock icon and the menus at the top of the screen (File, Format, View, Window, Help), at the cost that opening HeptaFloat from a launcher can switch desktops.
-- **Quit HeptaFloat** is at the bottom of Settings (or press <kbd>⌘</kbd> <kbd>Q</kbd> while the card is in front).
 
 > Using Raycast or another launcher? A launcher hotkey that opens HeptaFloat works too — press it again to hide. Just don't give the launcher and HeptaFloat's own shortcut the same keys.
 
@@ -123,23 +124,36 @@ Press <kbd>⌘</kbd> <kbd>,</kbd> while the card is in front.
 ```mermaid
 flowchart LR
   K["Your shortcut<br/>(⌃⌥J by default)"] --> C["HeptaFloat card<br/>floats over any screen"]
-  C <-->|"saves as you type · checks for changes every 3s · ⌘O search"| CLI["Heptabase CLI"]
+  C <-->|"read · save as you type<br/>check for changes every 3s (while visible)"| CLI["Heptabase CLI"]
+  C -->|"⌘N new card · ⌘O search<br/>paste images"| CLI
   CLI <--> H["Heptabase app<br/>(must be running)"]
   H <--> S["Heptabase sync<br/>your other devices"]
-  C -.->|"⌘P"| R[("Recent cards<br/>kept on your Mac")]
+  C -.->|"⌘P · ⌘[ ⌘] · ⌘. pin"| R[("Recent cards<br/>kept on your Mac")]
 ```
 
-HeptaFloat never stores your notes or talks to the internet itself. It reads and saves through the Heptabase app on your Mac (via Heptabase's CLI), and Heptabase syncs as usual. The only thing HeptaFloat keeps is the ⌘P list of cards you've opened.
+HeptaFloat never stores your notes or talks to the internet itself. It reads and saves through the Heptabase app on your Mac (via Heptabase's CLI), and Heptabase syncs as usual. The only things HeptaFloat keeps are the ⌘P list of cards you've opened and a few cached images.
+
+**What happens to what you type**
+
+- **Saved about half a second after you stop typing.** Switching cards never waits: the card you leave keeps saving in the background, and anything you typed goes to the card you typed it in.
+- **Heptabase closed or busy?** Your text stays in the card and is saved as soon as Heptabase answers again — the footer says *Not saved* until then.
+- **Changed in Heptabase at the same time** (say, on your phone)? Nothing is overwritten: your version is kept as a new card, *“… — HeptaFloat copy”*, and the card shows Heptabase's.
+- **Card deleted in Heptabase?** It leaves HeptaFloat's Recent list and closes if it's open; unsaved typing in it becomes a new card.
+- **Checks for changes only while the card is on screen**, so it costs nothing in the background.
 
 ## Privacy
 
-HeptaFloat runs entirely on your Mac. It reads and saves your journal through the Heptabase app on your computer and never sends your notes anywhere else. No accounts, no analytics.
+HeptaFloat runs entirely on your Mac. It reads and saves your journal through the Heptabase app on your computer and never sends your notes anywhere else. No accounts, no analytics. It keeps a small log on your Mac for troubleshooting (card IDs and error messages, not your text) at `~/Library/Logs/HeptaFloat.log`.
 
 ## FAQ
 
 **Does it work with notes other than the journal?** Yes — press <kbd>⌘</kbd> <kbd>O</kbd> to open any note or journal and edit it in the card. Other card types open in Heptabase.
 
 **What if I delete a card in Heptabase?** It disappears from HeptaFloat's Recent list too, and if it's open in the card, it closes. Anything you'd typed into it that wasn't saved yet is kept as a new card.
+
+**What if I edit the same card in Heptabase and HeptaFloat at once?** Nothing is lost — if both change at the same moment, your HeptaFloat version is saved as a separate *“HeptaFloat copy”* card (find it with <kbd>⌘</kbd> <kbd>P</kbd>).
+
+**Something didn't sync. Where do I look?** The footer at the bottom of the card shows errors (hover for the full message), and **Help → Show Log File** (with *Show in Dock and menu bar* on) or `~/Library/Logs/HeptaFloat.log` has the details — include it when [reporting a problem](https://github.com/madeyexz/heptafloat/issues/new).
 
 **Will it mess up my journal?** HeptaFloat keeps everything it doesn't edit exactly as it was (images, embeds, colors, tables…). Each save is checked against the latest version in Heptabase, so it won't overwrite changes you made there.
 
@@ -149,7 +163,7 @@ HeptaFloat runs entirely on your Mac. It reads and saves your journal through th
 
 ## For developers
 
-HeptaFloat is a native Swift shell (floating `NSPanel`, global hotkey, SwiftUI Settings) around a [ProseMirror](https://prosemirror.net) editor in a `WKWebView`. It reads and writes the journal with the Heptabase CLI (`heptabase journal read/save`), with md5 conflict checks.
+HeptaFloat is a native Swift shell (non-activating floating `NSPanel`, global hotkey, SwiftUI Settings) around a [ProseMirror](https://prosemirror.net) editor in a `WKWebView`. It reads and writes cards with the Heptabase CLI (`heptabase journal|note read/save`, `note create`, `file import/export`, `card list/properties`), with md5 conflict checks. Saves are a queue of per-card snapshots, so switching cards never waits on a save.
 
 ```
 Sources/main.swift   app shell: window, hotkey, menus, Settings, CLI bridge
@@ -158,6 +172,7 @@ src/editor.js        editor state, autosave, sync, day rollover
 src/commands.js      list editing (indent, split, toggle…)
 src/menus.js         "/" menu, @ mentions, selection toolbar, placeholders
 src/palette.js       ⌘O search and ⌘P recent-card pickers
+src/setup.js         the setup checklist shown until Heptabase is reachable
 src/index.html       styles (Heptabase theme tokens, light/dark)
 preview/             run the editor in a browser with a demo journal
 ```
@@ -166,7 +181,7 @@ preview/             run the editor in a browser with a demo journal
 
 **Try the editor without Heptabase:** `./preview/serve.sh`, then open <http://localhost:8765/stage.html>.
 
-**Regenerate screenshots and the demo:** `./preview/capture.sh` (needs `agent-browser` and `ffmpeg`).
+**Regenerate screenshots and the demo:** `./preview/capture.sh` and `./preview/record-demo.sh` (need `agent-browser` and `ffmpeg`). `open HeptaFloat.app --args --show-settings` opens Settings directly, for its screenshot.
 
 **Round-trip test:** `bun test/roundtrip.js <folder of journal JSON>` checks that loading and saving a journal changes nothing.
 
