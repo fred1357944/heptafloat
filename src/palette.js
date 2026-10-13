@@ -73,7 +73,7 @@ export function createPalette(host) {
     const parts = [c.current ? 'Current' : `Opened ${relativeTime(c.openedAt)}`, TYPE_LABEL[c.objectType] || 'Card'];
     if (c.chars != null) parts.push(`${c.chars.toLocaleString()} characters`);
     return { ...c, card: c, sub: parts.join(' • '),
-      actions: [{ act: 'pin', icon: 'pin', title: c.pinned ? 'Unpin' : 'Pin', on: c.pinned }, { act: 'forget', icon: 'remove', title: 'Remove from recents' }] };
+      actions: [{ act: 'pin', icon: 'pin', title: c.pinned ? 'Unpin (⌘.)' : 'Pin (⌘.)', on: c.pinned }, { act: 'forget', icon: 'remove', title: 'Remove from recents' }] };
   }
   function searchItem(c) {
     return { card: c, title: c.title, sub: [TYPE_LABEL[c.objectType] || 'Card', c.lastEditedTime && `Edited ${relativeTime(c.lastEditedTime)}`].filter(Boolean).join(' • '),
@@ -141,6 +141,7 @@ export function createPalette(host) {
     else if (e.key === 'Enter') { e.preventDefault(); act(e.metaKey ? 'heptabase' : 'open', items[index]); }
     else if (e.key === 'Backspace' && e.metaKey && mode === 'recent') { e.preventDefault(); act('forget', items[index]); }
     else if (e.key === 'Escape') { e.preventDefault(); close(); }
+    else if (mode === 'recent' && host.isPinKey?.(e)) { e.preventDefault(); act('pin', items[index]); } // ⌘. pins the highlighted card
     else {
       const which = host.pickerFor?.(e); // the user's ⌘P / ⌘O keys switch pickers or close
       if (which) { e.preventDefault(); which === mode ? close() : open(which); }
@@ -161,6 +162,8 @@ export function createPalette(host) {
 
   return {
     open, close,
+    /** ⌘. while the Recent list is open: pin / unpin the highlighted card. */
+    pinSelected() { if (mode !== 'recent') return false; act('pin', items[index]); return true; },
     /** Re-reads the Recent list if it's showing (e.g. after trashed cards were removed). */
     async reload() { if (mode === 'recent') { all = await host.recents(); showRecents(); } },
     toggle(which) { which === mode ? close() : open(which); },

@@ -242,7 +242,7 @@ async function show(target, { focusEnd = true, keepPlace = false } = {}) {
   }
   if (r.error) { status(r.error, { error: true }); return; }
   save(); // anything typed into the old card while this one loaded belongs to the old card
-  clearError();
+  if (!el('status').classList.contains('error')) status('');
   followToday = target.kind === 'journal' && target.id === today();
   applyRemote(r, { keepSelection: false });
   if (retrying) { unsaved.delete(key); dirty = true; scheduleSave(); }
@@ -275,6 +275,17 @@ function newDraft() {
   };
 }
 
+/** ⌘.: pins the card you're on to the top of ⌘P (or unpins it). */
+async function togglePin() {
+  if (palette.pinSelected()) return; // ⌘P open: the highlighted card
+  if (!current || current.kind === 'draft') { status('Type something first — then pin it'); return; }
+  const cards = (await call('recents')).cards || [];
+  const pinned = !cards.find((c) => c.id === current.id)?.pinned;
+  await call('pinCard', { id: current.id, pinned });
+  loadRecentList();
+  status(pinned ? 'Pinned — it stays at the top of ⌘P' : 'Unpinned', { duration: 2500 });
+}
+
 /** Records a card (the current one by default) in Recent. keepPlace updates its title and length
  *  without moving it up. */
 function touchRecent(r, { keepPlace = false, card = current, doc = view?.state.doc } = {}) {
@@ -290,7 +301,7 @@ const bindings = {
   bold: 'Mod-b', italic: 'Mod-i', underline: 'Mod-u', strike: 'Mod-Shift-x', code: 'Mod-e', link: 'Mod-k',
   highlight: 'Mod-Shift-h', toggleTodo: 'Mod-Enter', paragraph: 'Mod-Alt-0',
   heading1: 'Mod-Alt-1', heading2: 'Mod-Alt-2', heading3: 'Mod-Alt-3',
-  back: 'Mod-[', forward: 'Mod-]', newCard: 'Mod-n', search: 'Mod-o', recent: 'Mod-p', today: 'Mod-t', openInHeptabase: 'Mod-Shift-o',
+  pinCard: 'Mod-.', back: 'Mod-[', forward: 'Mod-]', newCard: 'Mod-n', search: 'Mod-o', recent: 'Mod-p', today: 'Mod-t', openInHeptabase: 'Mod-Shift-o',
 };
 
 /** Named commands, run from the keymap here or from the app's menus. */
@@ -306,6 +317,7 @@ function commandFor(name, schema) {
     heading3: setBlockType(n.heading, { level: 3 }),
     search: run(() => palette.toggle('search')), recent: run(() => palette.toggle('recent')),
     newCard: run(() => show({ kind: 'draft' })),
+    pinCard: run(() => togglePin()),
     back: run(() => step(1)),     // ⌘[ — older
     forward: run(() => step(-1)), // ⌘] — newer
     today: run(() => show({ kind: 'journal', id: today() })),
@@ -330,6 +342,7 @@ const palette = createPalette({
   pin: (card, on) => call('pinCard', { id: card.id, pinned: on }),
   forget: (card) => call('forgetCard', { id: card.id }),
   onClose: () => view?.focus(),
+  isPinKey: (e) => keyName(e) === normalize(bindings.pinCard),
   pickerFor: (e) => {
     const key = keyName(e);
     return key === normalize(bindings.search) ? 'search' : key === normalize(bindings.recent) ? 'recent' : null;
@@ -509,7 +522,9 @@ function endOfText(doc) {
 // MARK: chrome
 
 /** Footer status. Errors stay until things work again; the full text is in the tooltip. */
-function status(text, { sticky = false, error = false } = {}) {
+/** Footer message. Plain messages fade after `duration` ms; sticky ones stay until the next
+ *  message (for "Saving…"-style progress); errors stay until things work again. */
+function status(text, { sticky = false, error = false, duration = 1600 } = {}) {
   if (error && text) log(`status: ${text}`);
   const s = el('status');
   s.textContent = text;
@@ -517,7 +532,7 @@ function status(text, { sticky = false, error = false } = {}) {
   s.classList.toggle('show', !!text);
   s.classList.toggle('error', error);
   clearTimeout(status.t);
-  if (text && !sticky && !error) status.t = setTimeout(() => s.classList.remove('show'), 1600);
+  if (text && !sticky && !error) status.t = setTimeout(() => s.classList.remove('show'), duration);
 }
 function clearError() {
   if (el('status').classList.contains('error')) status('');
@@ -807,7 +822,7 @@ async function rescueFromTrash({ target, doc, shown }) {
     if (dirty) scheduleSave(0); // anything typed since goes to the new card
   }
   post({ action: 'touchRecent', id, objectType: 'note', title: c.current?.title || title, chars: [...mineDoc.textContent].length });
-  status("That card was in Heptabase's trash — your text is saved as a new card", { sticky: true });
+  status("That card was in Heptabase's trash — your text is saved as a new card", { duration: 8000 });
 }
 
 /** After opening a card: if it's in Heptabase's trash, say so (edits will become a new card). */
@@ -826,7 +841,7 @@ async function checkTrashed(target) {
     return;
   }
   await show({ kind: 'journal', id: today() });
-  status('That card was deleted in Heptabase, so it was closed', { sticky: true });
+  status('That card was deleted in Heptabase, so it was closed', { duration: 8000 });
 }
 
 function retrySaves() {
@@ -859,7 +874,7 @@ async function keepBoth({ target, doc, theirs, shown }) {
   const c = await call('createNote', { title, content: JSON.stringify(copy), copy: true });
   if (c.current || c.createdId) {
     post({ action: 'touchRecent', id: c.current?.id ?? c.createdId, objectType: 'note', title: c.current?.title || title, chars: 0 });
-    status(`Changed in Heptabase too — your version is saved as “${title}” (⌘P)`, { sticky: true });
+    status(`Changed in Heptabase too — your version is saved as “${title}” (⌘P)`, { duration: 8000 });
   } else {
     status(`Changed in Heptabase too, and your version couldn't be saved — ${c.error}`, { error: true });
   }

@@ -89,6 +89,7 @@ Notes and journals open in the floating card and are editable just like today's 
 | <kbd>Tab</kbd> / <kbd>⇧</kbd> <kbd>Tab</kbd> | Indent / outdent a list item |
 | <kbd>⌘</kbd> <kbd>↩</kbd> | Tick or untick a to-do |
 | <kbd>⌘</kbd> <kbd>N</kbd> | New card |
+| <kbd>⌘</kbd> <kbd>.</kbd> | Pin / unpin the card to the top of Recent (⌘P) |
 | <kbd>⌘</kbd> <kbd>[</kbd> / <kbd>⌘</kbd> <kbd>]</kbd> | Previous / next card in your Recent list (⌘P) |
 | <kbd>⌘</kbd> <kbd>O</kbd> / <kbd>⌘</kbd> <kbd>P</kbd> / <kbd>⌘</kbd> <kbd>T</kbd> | Search cards / recent cards / today's journal |
 | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>O</kbd> | Open the current card in Heptabase |
