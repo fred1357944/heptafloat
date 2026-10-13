@@ -15,6 +15,7 @@ import { LIST_ITEMS, schemaFor, schemaCovers, serialize, titles, formatDate } fr
 import { backspaceAtItemStart, enterInItem, lift, setChecked, sink, toggleTodo } from './commands.js';
 import { caretPlugin, placeholderPlugin, suggestPlugin, toggleHighlight, toolbarPlugin } from './menus.js';
 import { createPalette } from './palette.js';
+import { renderSetup } from './setup.js';
 
 const SAVE_DELAY = 600;
 const POLL_INTERVAL = 3000;
@@ -610,14 +611,24 @@ el('close').onclick = () => post({ action: 'hide' });
 el('pin').onclick = () => post({ action: 'togglePin' });
 el('open').onclick = () => openInHeptabase(current?.id);
 
-(async () => {
+/** Until Heptabase answers, show the setup checklist and keep checking; then start the editor. */
+let connectTimer = null;
+async function connect() {
+  clearTimeout(connectTimer);
   const r = await call('read', { kind: 'journal', id: today() });
-  if (r.error) {
-    status(r.error, { error: true });
-    // Keep trying until Heptabase is reachable, then start normally.
-    setTimeout(() => location.reload(), POLL_INTERVAL * 2);
-    return;
-  }
+  if (!r.error) { el('setup').hidden = true; document.body.classList.remove('needs-setup'); start(r); return; }
+  const setupStatus = await call('setupStatus');
+  if (setupStatus.step === 'ready') { connectTimer = setTimeout(connect, 500); return; } // came up meanwhile
+  document.body.classList.add('needs-setup');
+  renderSetup(el('setup'), setupStatus, {
+    onOpenURL: (url) => post({ action: 'openURL', url }),
+    onOpenHeptabase: () => post({ action: 'openHeptabase' }),
+    onCheck: connect,
+  });
+  connectTimer = setTimeout(connect, POLL_INTERVAL);
+}
+
+function start(r) {
   followToday = true;
   applyRemote(r, { keepSelection: false });
   view.dispatch(view.state.tr.setSelection(endOfText(view.state.doc)));
@@ -631,4 +642,6 @@ el('open').onclick = () => openInHeptabase(current?.id);
   document.addEventListener('error', (e) => {
     if (e.target.tagName === 'IMG' && e.target.closest('.ProseMirror')) e.target.classList.add('missing');
   }, true);
-})();
+}
+
+connect();

@@ -752,6 +752,10 @@ final class JournalWindow: NSObject, WKScriptMessageHandler, WKNavigationDelegat
                 }
                 catch { self.reply(requestId, ["error": Self.message(error)]) }
             }
+        case "setupStatus":
+            Heptabase.searchQueue.async { self.reply(requestId, Heptabase.setupStatus()) }
+        case "openHeptabase":
+            if let url = Heptabase.appURL { NSWorkspace.shared.open(url) }
         case "cardType":
             guard let id = body["id"] as? String else { return }
             Heptabase.searchQueue.async {
@@ -850,6 +854,30 @@ extension Heptabase {
         NSWorkspace.shared.urlForApplication(withBundleIdentifier: appBundleID)
             ?? ["/Applications/Heptabase.app", NSHomeDirectory() + "/Applications/Heptabase.app"]
                 .map(URL.init(fileURLWithPath:)).first { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
+    /// Which setup step stands between the user and a working card, for the card's setup checklist
+    /// (steps from https://support.heptabase.com/en/articles/14715462-heptabase-cli).
+    static func setupStatus() -> [String: Any] {
+        guard let app = appURL else { return ["step": "install"] }
+        if let version = Bundle(url: app)?.infoDictionary?["CFBundleShortVersionString"] as? String,
+           version.compare("1.91.0", options: .numeric) == .orderedAscending {
+            return ["step": "update", "version": version]
+        }
+        guard isAppRunning else { return ["step": "open"] }
+        guard cliPath != nil else { return ["step": "enableCLI"] }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        do {
+            _ = try readJournal(formatter.string(from: Date()))
+            return ["step": "ready"]
+        } catch {
+            let message = (error as? Failure)?.message ?? "\(error)"
+            if message.contains("subscription") { return ["step": "subscription"] }
+            // Heptabase is running but its CLI server isn't answering: the CLI switch is off.
+            if message.contains("CLI is off") || message.contains("Can't reach Heptabase") { return ["step": "enableCLI"] }
+            return ["step": "other", "message": message]
+        }
     }
 
     /// Tries a real read of today's journal, so a passing check means saving will work too.

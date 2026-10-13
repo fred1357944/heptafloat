@@ -24,6 +24,8 @@
     { id: 'aaaaaaaa-0000-4000-8000-000000000012', objectType: 'note', title: 'Smart pricing experiments', lastEditedTime: ago(24 * 12) },
   ];
   let content = null, md5 = 'demo-0', saves = 0;
+  const setupParam = new URLSearchParams(location.search).get('setup');
+  if (setupParam) window.SETUP = setupParam === 'update' ? { step: 'update', version: '1.84.2' } : setupParam === 'other' ? { step: 'other', message: 'Something unexpected' } : { step: setupParam };
   // Other cards you can open with ⌘P / ⌘O or from a mention.
   const NOTES = {
     'aaaaaaaa-0000-4000-8000-000000000002': { title: 'How to Take Smart Notes', content: { type: 'doc', content: [
@@ -51,7 +53,12 @@
     }
     const reply = (r) => setTimeout(() => window.hf.reply(m.requestId, r), 15);
     switch (m.action) {
+      case 'setupStatus':
+        reply(window.SETUP ?? { step: 'ready' });
+        break;
       case 'read': {
+        // ?setup=<step> pretends Heptabase isn't set up yet (preview of the setup checklist)
+        if (window.SETUP) { reply({ error: "Can't reach Heptabase — open Heptabase to keep syncing." }); break; }
         const note = NOTES[m.id];
         if (m.kind === 'note' && note) {
           docs[m.id] ??= JSON.stringify(note.content);

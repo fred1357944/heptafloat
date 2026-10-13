@@ -53,13 +53,17 @@ Opening Heptabase, finding today's journal, and switching back breaks your flow.
 
 ### One-time setup in Heptabase
 
-HeptaFloat talks to Heptabase through Heptabase's built-in **CLI** (its local connection for other apps).
+HeptaFloat talks to Heptabase through Heptabase's built-in **CLI** ([Heptabase's guide](https://support.heptabase.com/en/articles/14715462-heptabase-cli)). You need:
 
-1. Make sure the **Heptabase desktop app** is installed and running.
-2. In Heptabase, open **Settings → AI Features** and turn on the **CLI**. Heptabase may require an active subscription for this.
-3. That's it — open HeptaFloat and today's journal appears.
+1. The **Heptabase desktop app**, version 1.91 or later, **running**.
+2. **Settings → AI Features → CLI** turned on in Heptabase.
+3. An **active Heptabase subscription** (Heptabase only lets other apps in for subscribed accounts).
 
-To double-check, open **HeptaFloat → Settings…** (<kbd>⌘</kbd> <kbd>,</kbd>). The **Heptabase** section shows a green **Connected** when everything is set up, or tells you what's missing (Heptabase not running, CLI turned off, …).
+You don't have to remember this: until everything is in place, the card shows a checklist of exactly what's missing, with buttons to download or open Heptabase, and switches to today's journal by itself as soon as it can connect.
+
+<p align="center"><img src="docs/screenshot-setup.png" width="380" alt="Setup checklist: Turn on the Heptabase CLI"></p>
+
+To double-check later, open **Settings** (<kbd>⌘</kbd> <kbd>,</kbd>) — the **Heptabase** section shows a green **Connected** when everything works.
 
 ## Jump between cards
 
