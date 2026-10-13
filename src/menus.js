@@ -317,11 +317,24 @@ export function toolbarPlugin(onOpenLink) {
         el.style.top = `${a.top - h - 8 > 30 ? a.top - h - 8 : b.bottom + 8}px`;
       };
       // The link shortcut is remappable, so the editor asks for link mode with an event.
-      document.addEventListener('hf-link', () => { if (!view.state.selection.empty) { mode = 'link'; render(view); } });
-      view.dom.addEventListener('blur', () => setTimeout(() => render(view), 0));
-      view.dom.addEventListener('mousedown', () => { el.style.display = 'none'; mode = null; });
-      view.dom.addEventListener('mouseup', () => setTimeout(() => render(view), 0));
-      return { update: (v, prev) => { if (mode !== 'link' && !(prev && v.state.selection.eq(prev.selection) && v.state.doc.eq(prev.doc))) render(v); }, destroy: () => el.remove() };
+      const onLink = () => { if (!view.state.selection.empty) { mode = 'link'; render(view); } };
+      const later = () => setTimeout(() => render(view), 0);
+      const onDown = () => { el.style.display = 'none'; mode = null; };
+      document.addEventListener('hf-link', onLink);
+      view.dom.addEventListener('blur', later);
+      view.dom.addEventListener('mousedown', onDown);
+      view.dom.addEventListener('mouseup', later);
+      return {
+        update: (v, prev) => { if (mode !== 'link' && !(prev && v.state.selection.eq(prev.selection) && v.state.doc.eq(prev.doc))) render(v); },
+        // plugins are rebuilt on every card switch, so take everything back down
+        destroy: () => {
+          el.remove();
+          document.removeEventListener('hf-link', onLink);
+          view.dom.removeEventListener('blur', later);
+          view.dom.removeEventListener('mousedown', onDown);
+          view.dom.removeEventListener('mouseup', later);
+        },
+      };
     },
     props: {
       handleKeyDown(view, e) {
@@ -406,15 +419,29 @@ export function caretPlugin(container) {
         caret.style.animation = '';
       };
 
-      const later = () => requestAnimationFrame(place);
+      let alive = true;
+      const later = () => requestAnimationFrame(() => { if (alive) place(); });
+      const onStart = () => { composing = true; place(); };
+      const onEnd = () => { composing = false; later(); };
       view.dom.addEventListener('focus', later);
       view.dom.addEventListener('blur', later);
-      view.dom.addEventListener('compositionstart', () => { composing = true; place(); });
-      view.dom.addEventListener('compositionend', () => { composing = false; later(); });
+      view.dom.addEventListener('compositionstart', onStart);
+      view.dom.addEventListener('compositionend', onEnd);
       window.addEventListener('resize', later);
       document.fonts?.ready.then(later);
       later();
-      return { update: later, destroy() { caret.remove(); document.body.classList.remove('custom-caret'); } };
+      return {
+        update: later,
+        destroy() {
+          alive = false;
+          caret.remove();
+          view.dom.removeEventListener('focus', later);
+          view.dom.removeEventListener('blur', later);
+          view.dom.removeEventListener('compositionstart', onStart);
+          view.dom.removeEventListener('compositionend', onEnd);
+          window.removeEventListener('resize', later);
+        },
+      };
     },
   });
 }

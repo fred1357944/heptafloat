@@ -44,9 +44,8 @@ const el = (id) => document.getElementById(id);
 let view = null;
 let current = null;       // { kind: 'journal' | 'note', id }
 let followToday = true;   // showing today's journal: switch to the new day at midnight
-let baseMd5 = null;       // md5 of the last version we know Heptabase has
-let dirty = false;        // local edits not yet saved
-let saving = null;        // in-flight save promise
+let dirty = false;        // edits in the card on screen not yet handed to the save queue
+const md5Of = new Map();  // card → md5 of the version Heptabase has (what its next save is checked against)
 let saveTimer = null;
 let lastEdit = 0;
 let loadingRemote = false; // set while applying Heptabase's version, so it isn't saved back
@@ -141,24 +140,36 @@ async function readCard(target) {
 }
 function prefetch(target) { if (!cardCache.has(cacheKey(target))) readCard(target); }
 
-/** Switches the editor to another card, saving the current one first. */
+/** Switches the editor to another card. The card you leave is snapshotted and saves in the
+ *  background, so switching (and ⌘N) is immediate and nothing typed is lost. */
 async function show(target, { focusEnd = true, keepPlace = false } = {}) {
   if (current && target.kind === current.kind && target.id === current.id) { view?.focus(); return; }
   if (target.kind === 'draft' && current?.kind === 'draft' && !dirty) { view?.focus(); return; }
   const seq = ++navSeq;
-  if (dirty) await save();
-  else if (saving) await saving;
-  if (seq !== navSeq) return;
-  let r = target.kind === 'draft' ? newDraft() : cardCache.get(cacheKey(target));
-  const fromCache = !!r && target.kind !== 'draft';
+  if (uploads.size) {
+    // an image is still uploading into this card: let it land here first
+    status('Finishing image upload…', { sticky: true });
+    await Promise.all([...uploads]);
+    if (seq !== navSeq) return;
+  }
+  save();
+  const key = cacheKey(target);
+  if (inFlight.has(key)) { await saveChain; if (seq !== navSeq) return; } // back to a card that's still saving
+  const retrying = unsaved.get(key); // a card whose save failed: show what you wrote, not the old version
+  let r = target.kind === 'draft' ? newDraft()
+    : retrying ? { ...(cardCache.get(key) ?? {}), kind: target.kind, id: target.id, content: JSON.stringify(serialize(retrying.doc)), contentMd5: md5Of.get(key) }
+    : cardCache.get(key);
+  const fromCache = !!r && target.kind !== 'draft' && !retrying;
   if (!r) {
     do r = await readCard(target); while (r.stale);
     if (seq !== navSeq) return;
   }
   if (r.error) { status(r.error, { error: true }); return; }
+  save(); // anything typed into the old card while this one loaded belongs to the old card
   clearError();
   followToday = target.kind === 'journal' && target.id === today();
   applyRemote(r, { keepSelection: false });
+  if (retrying) { unsaved.delete(key); dirty = true; scheduleSave(); }
   if (r.kind === 'draft') {
     // like Heptabase's new card: "Heading 1" above, cursor on the first line of the body
     view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, view.state.doc.firstChild.nodeSize + 1)));
@@ -171,8 +182,8 @@ async function show(target, { focusEnd = true, keepPlace = false } = {}) {
   if (fromCache) {
     // shown instantly from memory; pick up anything that changed since
     readCard(target).then((fresh) => {
-      if (fresh.error || fresh.stale || current?.id !== fresh.id || dirty || saving) return;
-      if (fresh.contentMd5 !== baseMd5) applyRemote(fresh);
+      if (fresh.error || fresh.stale || current?.id !== fresh.id || cardBusy(key)) return;
+      if (fresh.contentMd5 !== md5Of.get(key)) applyRemote(fresh);
     });
   }
 }
@@ -188,11 +199,12 @@ function newDraft() {
   };
 }
 
-/** Records the current card in Recent. keepPlace updates its title and length without moving it up. */
-function touchRecent(r, { keepPlace = false } = {}) {
+/** Records a card (the current one by default) in Recent. keepPlace updates its title and length
+ *  without moving it up. */
+function touchRecent(r, { keepPlace = false, card = current, doc = view?.state.doc } = {}) {
   post({
-    action: 'touchRecent', id: current.id, objectType: current.kind, title: r.title || '',
-    chars: view ? [...view.state.doc.textContent].length : 0, keepPlace,
+    action: 'touchRecent', id: card.id, objectType: card.kind, title: r.title || '',
+    chars: doc ? [...doc.textContent].length : 0, keepPlace,
   });
 }
 
@@ -283,7 +295,7 @@ const mentionPopup = (() => {
     const here = kind === 'card' || kind === 'date';
     const label = target.textContent || 'Card';
     pop.innerHTML = `<div class="mp-title">${label.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))}</div>`
-      + (here ? '<button data-where="here"><span>Open here</span><kbd>↵</kbd></button>' : '')
+      + (here ? '<button data-where="here"><span>Open here</span></button>' : '')
       + '<button data-where="heptabase"><span>Open in Heptabase</span><kbd>⌘ click</kbd></button>';
     place(target);
     pop.dataset.id = id;
@@ -314,10 +326,11 @@ const mentionPopup = (() => {
     target.addEventListener('mouseleave', () => { clearTimeout(showTimer); hideSoon(); }, { once: true });
   });
   document.addEventListener('mousedown', (e) => { if (pinned && !pop.contains(e.target) && e.target !== chip) close(); });
+  // Any key closes the popup (Esc without also hiding the card); keys are never taken from the editor.
   document.addEventListener('keydown', (e) => {
-    if (!pinned || pop.style.display === 'none') return;
-    if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); pop.querySelector('[data-where]')?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); }
-    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
+    if (pop.style.display === 'none') return;
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); }
+    close();
   }, true);
 
   return { open, close };
@@ -470,7 +483,8 @@ function setTitle(result, json) {
 
 function load(result, { keepSelection } = {}) {
   current = { kind: result.kind, id: result.id };
-  baseMd5 = result.contentMd5;
+  if (result.kind !== 'draft') md5Of.set(cacheKey(result), result.contentMd5);
+  mentionPopup.close();
   let json;
   try { json = JSON.parse(result.content); } catch { json = { type: 'doc', content: [{ type: 'paragraph' }] }; }
   if (!json.content?.length) json.content = [{ type: 'paragraph' }];
@@ -528,7 +542,15 @@ function load(result, { keepSelection } = {}) {
 }
 
 /** Uploads an image file to Heptabase (via the CLI) and inserts an image block that points to it. */
-async function insertImage(file, pos) {
+const uploads = new Set(); // image uploads still running; switching cards waits for them
+
+function insertImage(file, pos) {
+  const upload = uploadImage(file, pos).finally(() => uploads.delete(upload));
+  uploads.add(upload);
+  return upload;
+}
+
+async function uploadImage(file, pos) {
   status('Adding image…', { sticky: true });
   const data = await new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -558,81 +580,158 @@ function onLocalChange() {
   if (loadingRemote) return;
   dirty = true;
   lastEdit = Date.now();
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(save, SAVE_DELAY);
+  scheduleSave();
 }
 
-async function save() {
+function scheduleSave(delay = SAVE_DELAY) {
   clearTimeout(saveTimer);
-  if (saving) { await saving; if (!dirty) return; }
-  if (!dirty || !view || !current) return;
-  const doc = view.state.doc, target = { ...current };
+  saveTimer = setTimeout(save, delay);
+}
+
+// MARK: save queue
+//
+// Every save is a snapshot of one card ({ target, doc }) taken the moment it's queued, so you can
+// keep typing or switch cards while it runs. Saves run one at a time, in order. A save that can't
+// reach Heptabase is kept per card and retried; a save that clashes with a change made in
+// Heptabase keeps both versions (keepBoth).
+
+let saveChain = Promise.resolve();
+const inFlight = new Map();      // card → number of its saves queued or running
+const unsaved = new Map();       // card → { target, doc } whose save failed; retried
+const generation = new Map();    // card → bumped on a clash, so saves queued before it are dropped
+const createdFrom = new Map();   // ⌘N draft id → the note it became
+const latestDoc = new Map();     // card → newest snapshot queued
+let retryTimer = null;
+
+/** True while a card has edits that aren't in Heptabase yet (so syncing must not replace it). */
+function cardBusy(key) {
+  return (current && cacheKey(current) === key && dirty) || inFlight.has(key) || unsaved.has(key);
+}
+
+/** Queues the card on screen if it has edits. Resolves when everything queued so far is done. */
+function save() {
+  clearTimeout(saveTimer);
+  if (dirty && view && current) {
+    dirty = false;
+    queueSave({ target: { ...current }, doc: view.state.doc });
+  }
+  return saveChain;
+}
+
+function queueSave(snap) {
+  const key = cacheKey(snap.target);
+  snap.generation = generation.get(key) ?? 0;
+  inFlight.set(key, (inFlight.get(key) ?? 0) + 1);
+  latestDoc.set(key, snap.doc);
+  unsaved.delete(key);
+  saveChain = saveChain
+    .then(() => send(snap))
+    .catch((e) => status(`Not saved — ${e?.message ?? e}`, { error: true }))
+    .finally(() => {
+      const n = inFlight.get(key) - 1;
+      if (n > 0) inFlight.set(key, n); else { inFlight.delete(key); latestDoc.delete(key); }
+    });
+  return saveChain;
+}
+
+async function send(snap) {
+  let { target } = snap;
+  const { doc } = snap;
+  const firstKey = cacheKey(target);
+  if (snap.generation < (generation.get(firstKey) ?? 0)) return; // already kept as a copy
+  if (target.kind === 'draft' && createdFrom.has(target.id)) target = { kind: 'note', id: createdFrom.get(target.id) };
+  const isShown = () => current && current.kind === target.kind && current.id === target.id;
+  const wasDraft = target.kind === 'draft';
   const content = JSON.stringify(serialize(doc));
-  dirty = false;
   saveCounts.set(cacheKey(target), (saveCounts.get(cacheKey(target)) ?? 0) + 1);
   status('Saving…', { sticky: true });
+
   // A ⌘N draft becomes a real note on its first save.
-  const request = target.kind === 'draft'
-    ? call('createNote', { title: doc.firstChild?.textContent.trim() || 'Untitled', content })
-    : call('save', { ...target, content, md5: baseMd5 });
-  saving = request.then((r) => {
-    saving = null;
-    const stillShown = current && current.id === target.id;
-    if (stillShown && target.kind === 'draft' && r.createdId) {
-      // The note exists now, even if filling it failed: from here on, retries save into it.
-      current = { kind: 'note', id: r.createdId };
+  const r = wasDraft
+    ? await call('createNote', { title: doc.firstChild?.textContent.trim() || 'Untitled', content })
+    : await call('save', { ...target, content, md5: md5Of.get(cacheKey(target)) ?? '' });
+
+  const createdId = wasDraft ? r.createdId ?? r.current?.id : null;
+  if (createdId) {
+    // The note exists now, even if filling it failed: from here on, saves go into it.
+    const note = { kind: 'note', id: createdId };
+    createdFrom.set(target.id, createdId);
+    md5Of.set(cacheKey(note), r.current?.contentMd5 ?? ''); // '' = nothing else has touched it yet
+    if (isShown()) {
+      current = note;
       document.body.dataset.kind = 'note';
-      if (r.error) baseMd5 = ''; // nothing else has touched it yet
+      el('title').textContent = r.current?.title || doc.firstChild?.textContent.trim() || 'Untitled';
     }
-    if (!r.error) {
-      if (stillShown && target.kind === 'draft') {
-        current = { kind: 'note', id: r.current.id };
-        el('title').textContent = r.current.title || 'Untitled';
-        document.body.dataset.kind = 'note';
-      }
-      remember(r.current);
-      if (stillShown) { baseMd5 = r.current.contentMd5; adoptIds(doc, r.current); touchRecent(r.current, { keepPlace: target.kind !== 'draft' }); }
-      clearError();
-      if (r.journalError) status(`Card created, but not linked in today's journal — ${r.journalError}`, { error: true });
-      else status(r.linkedInJournal ? "Saved · linked in today's journal" : 'Saved');
-    } else if (!r.current) {
-      // Heptabase unreachable: keep the edit and try again.
-      dirty = stillShown;
-      status(`Not saved — ${r.error}`, { error: true });
-      if (stillShown) saveTimer = setTimeout(save, 3000);
-    } else if (stillShown && r.current.contentMd5 !== baseMd5) {
-      // Changed in Heptabase too (another device, or right before switching apps). Keep both:
-      // save this version as a separate note, then show Heptabase's.
-      keepBoth(r.current);
-    } else {
-      dirty = stillShown;
-      status(`Not saved — ${r.error}`, { error: true });
+    target = note;
+  }
+  const key = cacheKey(target);
+
+  if (!r.error) {
+    let fresh = r.current;
+    if (!fresh) {
+      // Saved, but reading it back failed: ask again, so the next save is checked against this version.
+      const again = await readCard(target);
+      fresh = again.error || again.stale ? null : again;
     }
-  });
-  return saving;
+    md5Of.set(key, fresh ? fresh.contentMd5 : ''); // '' = unknown: the next save checks against whatever Heptabase has
+    if (fresh) remember(fresh);
+    if (isShown() && fresh) adoptIds(doc, fresh);
+    unsaved.delete(key);
+    touchRecent(fresh ?? { title: el('title').textContent }, isShown() ? { keepPlace: !wasDraft } : { keepPlace: !wasDraft, card: target, doc });
+    clearError();
+    if (r.journalError) status(`Card created, but not linked in today's journal — ${r.journalError}`, { error: true });
+    else status(r.linkedInJournal ? "Saved · linked in today's journal" : 'Saved');
+    return;
+  }
+
+  if (r.current && r.current.contentMd5 !== md5Of.get(key)) {
+    // Changed in Heptabase too (another device, or right before switching apps).
+    await keepBoth({ target, doc, theirs: r.current, shown: isShown() });
+    return;
+  }
+
+  // Couldn't reach Heptabase (or another failure): keep this version and retry.
+  if (isShown()) dirty = true;
+  else unsaved.set(key, { target, doc: latestDoc.get(firstKey) ?? doc });
+  status(`Not saved — ${r.error}`, { error: true });
+  clearTimeout(retryTimer);
+  retryTimer = setTimeout(retrySaves, 3000);
 }
 
-/** On a save clash: saves what's in the card (including anything typed since) as a new note,
- *  then shows Heptabase's version of the card. Nothing is overwritten. */
-function keepBoth(theirs) {
-  const name = el('title').textContent || 'Untitled';
+function retrySaves() {
+  for (const snap of [...unsaved.values()]) queueSave(snap);
+  save();
+}
+
+/** On a save clash: keeps your version as a new note and Heptabase's in the card. Nothing is
+ *  overwritten. Runs inside the save queue, so quitting waits for the copy to be saved. */
+async function keepBoth({ target, doc, theirs, shown }) {
+  const key = cacheKey(target);
+  generation.set(key, (generation.get(key) ?? 0) + 1); // saves of the old version still queued are dropped
+  md5Of.set(key, theirs.contentMd5);
+  remember(theirs);
+  let mineDoc = latestDoc.get(key) ?? doc;
+  let name = cardCache.get(key)?.title || 'Untitled';
+  if (shown) {
+    mineDoc = view.state.doc; // includes anything typed since
+    name = el('title').textContent || name;
+    clearTimeout(saveTimer);
+    dirty = false;
+    applyRemote(theirs);
+  }
   const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const title = `${name} — HeptaFloat copy ${time}`;
   const withoutIds = (n) => ({ ...n, ...(n.attrs && 'id' in n.attrs && { attrs: { ...n.attrs, id: null } }), ...(n.content && { content: n.content.map(withoutIds) }) });
-  const mine = withoutIds(serialize(view.state.doc));
+  const mine = withoutIds(serialize(mineDoc));
   const copy = { type: 'doc', content: [{ type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: title }] }, ...mine.content] };
-  clearTimeout(saveTimer);
-  dirty = false;
-  applyRemote(theirs);
   status('Changed in Heptabase too — saving your version as a copy…', { sticky: true });
-  call('createNote', { title, content: JSON.stringify(copy), copy: true }).then((c) => {
-    if (c.current) {
-      post({ action: 'touchRecent', id: c.current.id, objectType: 'note', title: c.current.title || title, chars: 0 });
-      status(`Changed in Heptabase too — your version is saved as “${title}” (⌘P)`, { sticky: true });
-    } else {
-      status(`Changed in Heptabase too, and your version couldn't be saved — ${c.error}`, { error: true });
-    }
-  });
+  const c = await call('createNote', { title, content: JSON.stringify(copy), copy: true });
+  if (c.current || c.createdId) {
+    post({ action: 'touchRecent', id: c.current?.id ?? c.createdId, objectType: 'note', title: c.current?.title || title, chars: 0 });
+    status(`Changed in Heptabase too — your version is saved as “${title}” (⌘P)`, { sticky: true });
+  } else {
+    status(`Changed in Heptabase too, and your version couldn't be saved — ${c.error}`, { error: true });
+  }
 }
 
 /** After a save the CLI assigns ids to new blocks; copy them in so later saves keep them. */
@@ -666,15 +765,15 @@ function applyRemote(result, opts = { keepSelection: true }) {
 let onScreen = true; // the app tells us when the card is hidden; no syncing then
 
 async function poll() {
-  if (!onScreen || !current || current.kind === 'draft' || dirty || saving || Date.now() - lastEdit < 1500) return;
+  if (!onScreen || !current || current.kind === 'draft' || cardBusy(cacheKey(current)) || Date.now() - lastEdit < 1500) return;
   // Showing today's journal: follow the date across midnight.
   if (followToday && current.id !== today()) { show({ kind: 'journal', id: today() }); return; }
   const target = { ...current };
   const r = await readCard(target);
   if (r.error) { status(r.error, { error: true }); return; }
   clearError();
-  if (r.stale || dirty || saving || current.id !== target.id) return;
-  if (r.contentMd5 !== baseMd5) applyRemote(r);
+  if (r.stale || cardBusy(cacheKey(target)) || current.id !== target.id) return;
+  if (r.contentMd5 !== md5Of.get(cacheKey(target))) applyRemote(r);
 }
 
 window.hf = {
@@ -683,7 +782,7 @@ window.hf = {
   setPinned(on) { document.body.classList.toggle('pinned', on); },
   shown() { onScreen = true; view?.focus(); poll(); },
   setVisible(v) { const was = onScreen; onScreen = v; if (v && !was) poll(); },
-  async flush() { if (dirty) await save(); else if (saving) await saving; return true; },
+  async flush() { await Promise.all([...uploads]); await save(); return true; },
   undo() { if (view) { undo(view.state, view.dispatch); view.focus(); } },
   redo() { if (view) { redo(view.state, view.dispatch); view.focus(); } },
   titles(map) {
@@ -709,11 +808,17 @@ el('pin').onclick = () => post({ action: 'togglePin' });
 el('open').onclick = () => openInHeptabase(current?.id);
 
 /** Until Heptabase answers, show the setup checklist and keep checking; then start the editor. */
-let connectTimer = null;
+let connectTimer = null, connecting = false, started = false;
 async function connect() {
+  if (connecting || started) return;
+  connecting = true;
+  try { await tryConnect(); } finally { connecting = false; }
+}
+
+async function tryConnect() {
   clearTimeout(connectTimer);
   const r = await call('read', { kind: 'journal', id: today() });
-  if (!r.error) { el('setup').hidden = true; document.body.classList.remove('needs-setup'); start(r); return; }
+  if (!r.error) { started = true; el('setup').hidden = true; document.body.classList.remove('needs-setup'); start(r); return; }
   const setupStatus = await call('setupStatus');
   if (setupStatus.step === 'ready') { connectTimer = setTimeout(connect, 500); return; } // came up meanwhile
   document.body.classList.add('needs-setup');

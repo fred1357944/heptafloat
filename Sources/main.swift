@@ -1263,7 +1263,6 @@ final class SettingsTabs: NSTabViewController {
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var journal: JournalWindow!
     private var hotKey: HotKey?
-    private var flushed = false
     private let settings = SettingsModel()
     private var settingsWindow: NSWindow?
     private var pinItem: NSMenuItem?
@@ -1337,13 +1336,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         journal.show()
     }
 
+    /// Finishes saving before quitting. .terminateLater (not cancel) so a Mac restart, shutdown or
+    /// log out carries on once the last save is done.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if flushed { return .terminateNow }
-        journal.flush {
-            self.flushed = true
-            NSApp.terminate(nil)
-        }
-        return .terminateCancel
+        journal.flush { NSApp.reply(toApplicationShouldTerminate: true) }
+        return .terminateLater
     }
 
     // MARK: actions

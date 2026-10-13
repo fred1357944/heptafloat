@@ -52,9 +52,17 @@
       content = (await (await fetch('demo-journal.json')).text()).replaceAll('__TODAY__', iso);
     }
     // ?latency=250 makes reads as slow as the real CLI
-    const delay = m.action === 'read' ? Number(new URLSearchParams(location.search).get('latency') || 15) : 15;
+    const q = new URLSearchParams(location.search);
+    const delay = m.action === 'read' ? Number(q.get('latency') || 15)
+      : m.action === 'save' || m.action === 'createNote' ? Number(q.get('saveLatency') || 15)
+      : m.action === 'importImage' ? 1500 : 15;
+    // test hooks for failures
+    if (m.action === 'save' && window.FAIL_SAVES) { setTimeout(() => window.hf.reply(m.requestId, { error: "Can't reach Heptabase" }), delay); return; }
     const reply = (r) => setTimeout(() => window.hf.reply(m.requestId, r), delay);
     switch (m.action) {
+      case 'importImage':
+        reply({ fileId: '11111111-2222-4333-8444-555555555555', width: 40, height: 20 });
+        break;
       case 'setupStatus':
         reply(window.SETUP ?? { step: 'ready' });
         break;
@@ -102,6 +110,7 @@
           docs[m.id] = m.content;
           reply({ current: { kind: 'note', id: m.id, title: NOTES[m.id]?.title, content: m.content, contentMd5: `${m.id}-${m.content.length}` } });
         } else {
+          if (window.NO_READBACK_ONCE) { window.NO_READBACK_ONCE = false; content = m.content; md5 = `demo-${++saves}`; reply({}); break; }
           if (m.md5 && m.md5 !== md5) { reply({ error: 'conflict', current: { kind: 'journal', id: m.id, title, content, contentMd5: md5 } }); break; }
           content = m.content; md5 = `demo-${++saves}`;
           reply({ current: { kind: 'journal', id: m.id, title, content, contentMd5: md5 } });
@@ -126,6 +135,12 @@
       default: console.log('host', m);
     }
   };
+  // test hook: count listeners the editor leaves behind
+  window.listenerCount = {};
+  const add = EventTarget.prototype.addEventListener, remove = EventTarget.prototype.removeEventListener;
+  EventTarget.prototype.addEventListener = function (t, ...a) { window.listenerCount[t] = (window.listenerCount[t] || 0) + 1; return add.call(this, t, ...a); };
+  EventTarget.prototype.removeEventListener = function (t, ...a) { window.listenerCount[t] = (window.listenerCount[t] || 0) - 1; return remove.call(this, t, ...a); };
+  window.journalText = () => JSON.parse(content).content.map((n) => JSON.stringify(n)).join('');
   // test hook: someone edits today's journal elsewhere (another device)
   window.externalEdit = (text) => {
     const d = JSON.parse(content); d.content.push({ type: 'paragraph', content: [{ type: 'text', text }] });
