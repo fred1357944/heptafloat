@@ -63,6 +63,10 @@
       case 'importImage':
         reply({ fileId: '11111111-2222-4333-8444-555555555555', width: 40, height: 20 });
         break;
+      case 'linkInJournal': {
+        const d = JSON.parse(content); d.content.push({ type: 'paragraph', content: [{ type: 'card', attrs: { cardId: m.id } }] });
+        content = JSON.stringify(d); md5 = `demo-link-${Date.now()}`; reply({}); break;
+      }
       case 'setupStatus':
         reply(window.SETUP ?? { step: 'ready' });
         break;
@@ -92,6 +96,13 @@
         }
         NOTES[id] = { title: m.title, content: JSON.parse(m.content) };
         docs[id] = m.content;
+        // test hook: "Add new cards to today's journal" on
+        if (window.LINK_SETTING && !m.copy) {
+          if (m.journalShown) { reply({ createdId: id, linkHere: true, current: { kind: 'note', id, title: m.title, content: m.content, contentMd5: `${id}-${m.content.length}` } }); break; }
+          const d = JSON.parse(content); d.content.push({ type: 'paragraph', content: [{ type: 'card', attrs: { cardId: id } }] });
+          content = JSON.stringify(d); md5 = `demo-link-${Date.now()}`;
+          reply({ createdId: id, linkedInJournal: true, current: { kind: 'note', id, title: m.title, content: m.content, contentMd5: `${id}-${m.content.length}` } }); break;
+        }
         reply({ current: { kind: 'note', id, title: m.title, content: m.content, contentMd5: `${id}-${m.content.length}` } });
         break;
       }

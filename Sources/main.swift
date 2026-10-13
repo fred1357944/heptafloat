@@ -616,6 +616,7 @@ final class JournalWindow: NSObject, WKScriptMessageHandler, WKNavigationDelegat
             self.web.evaluateJavaScript("window.hf && window.hf.setVisible(\(visible))")
         }
 
+        _ = appWatcher // start tracking the app you're in from launch
         if !panel.setFrameUsingName("HeptaFloat") { panel.center() }
         panel.setFrameAutosaveName("HeptaFloat")
         applyPinned()
@@ -642,12 +643,21 @@ final class JournalWindow: NSObject, WKScriptMessageHandler, WKNavigationDelegat
 
     var isShown: Bool { panel.isVisible && panel.isKeyWindow && !NSApp.isHidden }
 
-    /// The app that was in front before the card appeared, to hand focus back to on hide.
+    /// The last app you used other than HeptaFloat, to hand focus back to on hide. Tracked
+    /// continuously: a launcher (e.g. Raycast) can make HeptaFloat active before show() runs, and
+    /// handing focus to an older app would pull you out of full screen.
     private var previousApp: NSRunningApplication?
+    private lazy var appWatcher: NSObjectProtocol = NSWorkspace.shared.notificationCenter.addObserver(
+        forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+    ) { [weak self] note in
+        if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+           app != NSRunningApplication.current { self?.previousApp = app }
+    }
 
     /// Shows the card on the current space — over full-screen apps too — without activating
     /// HeptaFloat, so the app you're in stays in front and keeps its full screen.
     func show() {
+        _ = appWatcher
         if let front = NSWorkspace.shared.frontmostApplication, front != NSRunningApplication.current {
             previousApp = front
         }
@@ -781,7 +791,11 @@ final class JournalWindow: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         case "createNote":
             guard let content = body["content"] as? String else { return }
             let title = body["title"] as? String ?? ""
-            let linkInJournal = Settings.addNewCardsToJournal && body["copy"] as? Bool != true
+            let wantsLink = Settings.addNewCardsToJournal && body["copy"] as? Bool != true
+            // With today's journal open in the card, the editor adds the link itself (so it saves
+            // like any edit); otherwise it's appended here.
+            let linkHere = wantsLink && body["journalShown"] as? Bool == true
+            let linkInJournal = wantsLink && !linkHere
             Heptabase.queue.async {
                 var result: [String: Any] = [:]
                 do {
@@ -789,6 +803,7 @@ final class JournalWindow: NSObject, WKScriptMessageHandler, WKNavigationDelegat
                     // retries the fill on this note instead of creating another one.
                     let id = try Heptabase.createNote(title: title)
                     result["createdId"] = id
+                    if linkHere { result["linkHere"] = true }
                     if linkInJournal {
                         // The card exists either way; a failed link only shows a note in the footer.
                         do { try Heptabase.linkInTodaysJournal(id); result["linkedInJournal"] = true }
@@ -799,6 +814,12 @@ final class JournalWindow: NSObject, WKScriptMessageHandler, WKNavigationDelegat
                     result["error"] = Self.message(error)
                 }
                 self.reply(requestId, result)
+            }
+        case "linkInJournal":
+            guard let id = body["id"] as? String else { return }
+            Heptabase.queue.async {
+                do { try Heptabase.linkInTodaysJournal(id); self.reply(requestId, [:]) }
+                catch { self.reply(requestId, ["error": Self.message(error)]) }
             }
         case "setupStatus":
             Heptabase.searchQueue.async { self.reply(requestId, Heptabase.setupStatus()) }

@@ -110,7 +110,7 @@ async function step(direction) { // +1 = older (down the list), -1 = newer
   await show(target, { keepPlace: true });
   if (navTarget === target) navTarget = null;
   // warm up the next stops in both directions
-  for (const d of [1, -1]) { const n = nextShowable(list, target.index + d, d); if (n) prefetch(n); }
+  for (const d of [1, -1]) { const n = nextShowable(list, target.index + d, d); if (n) prefetch(n); } // refresh if older than 30 s
   loadRecentList();
 }
 
@@ -123,7 +123,7 @@ function remember(r) {
   if (!r || r.error || !r.kind || r.kind === 'draft') return;
   const key = cacheKey(r);
   cardCache.delete(key);
-  cardCache.set(key, r);
+  cardCache.set(key, { ...r, fetchedAt: Date.now() });
   if (cardCache.size > CACHE_SIZE) cardCache.delete(cardCache.keys().next().value);
 }
 
@@ -138,7 +138,42 @@ async function readCard(target) {
   remember(r);
   return r;
 }
-function prefetch(target) { if (!cardCache.has(cacheKey(target))) readCard(target); }
+/** Loads a card into the cache if it isn't there or is older than maxAge ms. */
+function prefetch(target, maxAge = 30_000) {
+  const hit = cardCache.get(cacheKey(target));
+  if (!hit || Date.now() - hit.fetchedAt > maxAge) readCard(target);
+}
+
+/** Edits made in Heptabase mostly happen while the card is hidden: when it's shown again,
+ *  refresh the cards ⌘[ / ⌘] would show next, so they're current, not just instant. */
+async function refreshNearby() {
+  const list = await loadRecentList();
+  const i = list.findIndex((c) => c.id === current?.id);
+  for (const d of [1, -1]) {
+    const n = nextShowable(list, i < 0 ? (d > 0 ? 0 : list.length - 1) : i + d, d);
+    if (n) prefetch(n, 5_000);
+  }
+}
+
+const todayKey = () => cacheKey({ kind: 'journal', id: today() });
+
+/** Puts a link to a new card at the end of today's journal, when that journal is open in the card. */
+function linkHereInJournal(cardId) {
+  if (!current || cacheKey(current) !== todayKey()) { call('linkInJournal', { id: cardId }); forgetJournal(); return; }
+  const { schema } = view.state;
+  const line = schema.nodes.paragraph.create(null, schema.nodes.card.create({ cardId }));
+  view.dispatch(view.state.tr.insert(view.state.doc.content.size, line)); // saves like any edit
+}
+
+/** Today's journal was changed in Heptabase by HeptaFloat itself: don't trust the cached copy. */
+function forgetJournal() {
+  cardCache.delete(todayKey());
+  if (current && cacheKey(current) === todayKey() && !cardBusy(todayKey())) {
+    readCard({ kind: 'journal', id: today() }).then((fresh) => {
+      if (!fresh.error && !fresh.stale && current && cacheKey(current) === todayKey() && !cardBusy(todayKey())) applyRemote(fresh);
+    });
+  }
+}
 
 /** Switches the editor to another card. The card you leave is snapshotted and saves in the
  *  background, so switching (and ⌘N) is immediate and nothing typed is lost. */
@@ -648,7 +683,7 @@ async function send(snap) {
 
   // A ⌘N draft becomes a real note on its first save.
   const r = wasDraft
-    ? await call('createNote', { title: doc.firstChild?.textContent.trim() || 'Untitled', content })
+    ? await call('createNote', { title: doc.firstChild?.textContent.trim() || 'Untitled', content, journalShown: !!current && cacheKey(current) === todayKey() })
     : await call('save', { ...target, content, md5: md5Of.get(cacheKey(target)) ?? '' });
 
   const createdId = wasDraft ? r.createdId ?? r.current?.id : null;
@@ -679,8 +714,10 @@ async function send(snap) {
     unsaved.delete(key);
     touchRecent(fresh ?? { title: el('title').textContent }, isShown() ? { keepPlace: !wasDraft } : { keepPlace: !wasDraft, card: target, doc });
     clearError();
+    if (r.linkHere) linkHereInJournal(target.id);
+    if (r.linkedInJournal) forgetJournal();
     if (r.journalError) status(`Card created, but not linked in today's journal — ${r.journalError}`, { error: true });
-    else status(r.linkedInJournal ? "Saved · linked in today's journal" : 'Saved');
+    else status(r.linkedInJournal || r.linkHere ? "Saved · linked in today's journal" : 'Saved');
     return;
   }
 
@@ -780,8 +817,8 @@ window.hf = {
   reply(requestId, result) { waiting.get(requestId)?.(result); waiting.delete(requestId); },
   setScale(s) { document.documentElement.style.setProperty('--scale', s); if (view) view.dispatch(view.state.tr); },
   setPinned(on) { document.body.classList.toggle('pinned', on); },
-  shown() { onScreen = true; view?.focus(); poll(); },
-  setVisible(v) { const was = onScreen; onScreen = v; if (v && !was) poll(); },
+  shown() { onScreen = true; view?.focus(); poll(); if (current) refreshNearby(); },
+  setVisible(v) { const was = onScreen; onScreen = v; if (v && !was) { poll(); if (current) refreshNearby(); } },
   async flush() { await Promise.all([...uploads]); await save(); return true; },
   undo() { if (view) { undo(view.state, view.dispatch); view.focus(); } },
   redo() { if (view) { redo(view.state, view.dispatch); view.focus(); } },
