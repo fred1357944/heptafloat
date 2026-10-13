@@ -106,6 +106,8 @@ enum Heptabase {
         let url: URL
         if let hit = cached(fileId) {
             url = hit
+            // mark it recently used, so pruning removes the oldest-used images first
+            try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: hit.path)
         } else {
             let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("heptafloat-export-\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
@@ -116,6 +118,7 @@ enum Heptabase {
             url = fileCache.appendingPathComponent(fileId).appendingPathExtension(ext)
             try? FileManager.default.removeItem(at: url)
             try FileManager.default.moveItem(at: URL(fileURLWithPath: path), to: url)
+            pruneFileCache()
         }
         let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
         return (try Data(contentsOf: url), mime)
@@ -132,8 +135,29 @@ enum Heptabase {
         let r = try run(["file", "import", file.path])
         if let id = r["fileId"] as? String {
             try? data.write(to: fileCache.appendingPathComponent(id).appendingPathExtension(file.pathExtension))
+            pruneFileCache()
         }
         return r
+    }
+
+    static let fileCacheLimit = 200 * 1024 * 1024
+
+    /// Keeps the image cache under fileCacheLimit by deleting the least recently used images.
+    /// Deleted images are simply exported from Heptabase again the next time they're shown.
+    static func pruneFileCache() {
+        let keys: [URLResourceKey] = [.fileSizeKey, .contentModificationDateKey]
+        guard let files = try? FileManager.default.contentsOfDirectory(at: fileCache, includingPropertiesForKeys: keys) else { return }
+        var entries = files.compactMap { url -> (url: URL, size: Int, used: Date)? in
+            guard let v = try? url.resourceValues(forKeys: Set(keys)) else { return nil }
+            return (url, v.fileSize ?? 0, v.contentModificationDate ?? .distantPast)
+        }
+        var total = entries.reduce(0) { $0 + $1.size }
+        guard total > fileCacheLimit else { return }
+        entries.sort { $0.used < $1.used }
+        for e in entries where total > fileCacheLimit {
+            try? FileManager.default.removeItem(at: e.url)
+            total -= e.size
+        }
     }
 
     /// Creates a note you wrote (not marked "Created by AI") and fills it with the editor's content.
@@ -577,6 +601,13 @@ final class JournalWindow: NSObject, WKScriptMessageHandler, WKNavigationDelegat
             web.topAnchor.constraint(equalTo: backdrop.topAnchor),
             web.bottomAnchor.constraint(equalTo: backdrop.bottomAnchor),
         ])
+
+        // Pause syncing while the card isn't on screen; the editor checks once when it reappears.
+        NotificationCenter.default.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: panel, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            let visible = self.panel.isVisible && self.panel.occlusionState.contains(.visible)
+            self.web.evaluateJavaScript("window.hf && window.hf.setVisible(\(visible))")
+        }
 
         if !panel.setFrameUsingName("HeptaFloat") { panel.center() }
         panel.setFrameAutosaveName("HeptaFloat")

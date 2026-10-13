@@ -635,8 +635,10 @@ function applyRemote(result, opts = { keepSelection: true }) {
   loadingRemote = false;
 }
 
+let onScreen = true; // the app tells us when the card is hidden; no syncing then
+
 async function poll() {
-  if (!current || current.kind === 'draft' || dirty || saving || Date.now() - lastEdit < 1500) return;
+  if (!onScreen || !current || current.kind === 'draft' || dirty || saving || Date.now() - lastEdit < 1500) return;
   // Showing today's journal: follow the date across midnight.
   if (followToday && current.id !== today()) { show({ kind: 'journal', id: today() }); return; }
   const target = { ...current };
@@ -651,7 +653,8 @@ window.hf = {
   reply(requestId, result) { waiting.get(requestId)?.(result); waiting.delete(requestId); },
   setScale(s) { document.documentElement.style.setProperty('--scale', s); if (view) view.dispatch(view.state.tr); },
   setPinned(on) { document.body.classList.toggle('pinned', on); },
-  shown() { view?.focus(); poll(); },
+  shown() { onScreen = true; view?.focus(); poll(); },
+  setVisible(v) { const was = onScreen; onScreen = v; if (v && !was) poll(); },
   async flush() { if (dirty) await save(); else if (saving) await saving; return true; },
   undo() { if (view) { undo(view.state, view.dispatch); view.focus(); } },
   redo() { if (view) { redo(view.state, view.dispatch); view.focus(); } },
