@@ -267,14 +267,20 @@ enum Recents {
         set { UserDefaults.standard.set(Array(newValue.prefix(limit)), forKey: key) }
     }
 
-    /// Moves a card to the top (or refreshes its title and length), keeping its pin.
+    /// Moves a card to the top (or refreshes its title and length), keeping its pin. With
+    /// keepPlace, a card already in the list is updated where it is (⌘[ / ⌘] and saves).
     static func touch(_ card: [String: Any]) {
         guard let id = card["id"] as? String else { return }
         var list = all
+        if card["keepPlace"] as? Bool == true, let i = list.firstIndex(where: { $0["id"] as? String == id }) {
+            for key in ["title", "chars", "objectType"] { if let v = card[key] { list[i][key] = v } }
+            all = list
+            return
+        }
         let old = list.first { $0["id"] as? String == id }
         list.removeAll { $0["id"] as? String == id }
         var entry = old ?? [:]
-        for (k, v) in card where k != "action" && k != "requestId" { entry[k] = v }
+        for (k, v) in card where !["action", "requestId", "keepPlace"].contains(k) { entry[k] = v }
         entry["openedAt"] = ISO8601DateFormatter().string(from: Date())
         list.insert(entry, at: 0)
         all = list

@@ -79,41 +79,21 @@ async function openHere(card) {
   await show({ kind, id: card.id });
 }
 
-// Back / forward through the cards opened this session (⌘[ / ⌘]), like a browser.
-const trail = { cards: [], at: -1 };
-const sameCard = (a, b) => a && b && a.kind === b.kind && a.id === b.id;
-
-/** The current card is a ⌘N draft nobody has typed in (typed drafts become notes on save). */
-function untouchedDraft() {
-  return current?.kind === 'draft' && !dirty && !saving && sameCard(trail.cards[trail.at], current);
-}
-
-function record(card) {
-  // An untouched ⌘N draft you navigate away from never became a card: forget it.
-  if (untouchedDraft()) { trail.cards.splice(trail.at, 1); trail.at--; }
-  if (sameCard(trail.cards[trail.at], card)) return;
-  trail.cards = trail.cards.slice(0, trail.at + 1);
-  trail.cards.push(card);
-  trail.at = trail.cards.length - 1;
-}
-
-async function go(step) {
-  const to = trail.at + step;
-  if (to < 0 || to >= trail.cards.length) return;
-  if (untouchedDraft()) {
-    // leaving an untouched draft: drop it, and step from where it was
-    trail.cards.splice(trail.at, 1);
-    if (step > 0) { await show(trail.cards[trail.at] ?? trail.cards[trail.at - 1], { fromTrail: true }); return; }
-    trail.at--;
-    await show(trail.cards[trail.at], { fromTrail: true });
-    return;
+// ⌘[ / ⌘] walk the Recent list (the same order as ⌘P), like Raycast Notes. Cards reached this way
+// keep their place in the list, so repeated presses keep moving instead of bouncing between two.
+async function step(direction) { // +1 = older (down the list), -1 = newer
+  const cards = (await call('recents')).cards || [];
+  const list = [...cards.filter((c) => c.pinned), ...cards.filter((c) => !c.pinned)]; // as grouped in ⌘P
+  const i = list.findIndex((c) => c.id === current?.id);
+  // skip cards the card can't show (e.g. PDFs)
+  for (let j = i < 0 ? (direction > 0 ? 0 : -1) : i + direction; j >= 0 && j < list.length; j += direction) {
+    const kind = editableKind(list[j].objectType, list[j].id);
+    if (kind) { await show({ kind, id: list[j].id }, { keepPlace: true }); return; }
   }
-  trail.at = to;
-  await show(trail.cards[to], { fromTrail: true });
 }
 
 /** Switches the editor to another card, saving the current one first. */
-async function show(target, { focusEnd = true, fromTrail = false } = {}) {
+async function show(target, { focusEnd = true, keepPlace = false } = {}) {
   if (current && target.kind === current.kind && target.id === current.id) { view?.focus(); return; }
   if (target.kind === 'draft' && current?.kind === 'draft' && !dirty) { view?.focus(); return; }
   if (dirty) await save();
@@ -121,7 +101,6 @@ async function show(target, { focusEnd = true, fromTrail = false } = {}) {
   const r = target.kind === 'draft' ? newDraft() : await call('read', target);
   if (r.error) { status(r.error, { error: true }); return; }
   clearError();
-  if (!fromTrail) record({ kind: r.kind, id: r.id });
   followToday = target.kind === 'journal' && target.id === today();
   applyRemote(r, { keepSelection: false });
   if (r.kind === 'draft') {
@@ -131,7 +110,7 @@ async function show(target, { focusEnd = true, fromTrail = false } = {}) {
     el('main').scrollTop = 0;
   }
   view.focus();
-  if (r.kind !== 'draft') touchRecent(r);
+  if (r.kind !== 'draft') touchRecent(r, { keepPlace });
 }
 
 /**
@@ -145,10 +124,11 @@ function newDraft() {
   };
 }
 
-function touchRecent(r) {
+/** Records the current card in Recent. keepPlace updates its title and length without moving it up. */
+function touchRecent(r, { keepPlace = false } = {}) {
   post({
     action: 'touchRecent', id: current.id, objectType: current.kind, title: r.title || '',
-    chars: view ? [...view.state.doc.textContent].length : 0,
+    chars: view ? [...view.state.doc.textContent].length : 0, keepPlace,
   });
 }
 
@@ -174,8 +154,8 @@ function commandFor(name, schema) {
     heading3: setBlockType(n.heading, { level: 3 }),
     search: run(() => palette.toggle('search')), recent: run(() => palette.toggle('recent')),
     newCard: run(() => show({ kind: 'draft' })),
-    back: run(() => go(-1)),
-    forward: run(() => go(1)),
+    back: run(() => step(1)),     // ⌘[ — older
+    forward: run(() => step(-1)), // ⌘] — newer
     today: run(() => show({ kind: 'journal', id: today() })),
     openInHeptabase: run(() => { if (current?.kind !== 'draft') openInHeptabase(current?.id); }),
   }[name];
@@ -536,11 +516,10 @@ async function save() {
     if (!r.error) {
       if (stillShown && target.kind === 'draft') {
         current = { kind: 'note', id: r.current.id };
-        trail.cards = trail.cards.map((c) => (sameCard(c, target) ? { ...current } : c));
         el('title').textContent = r.current.title || 'Untitled';
         document.body.dataset.kind = 'note';
       }
-      if (stillShown) { baseMd5 = r.current.contentMd5; adoptIds(doc, r.current); touchRecent(r.current); }
+      if (stillShown) { baseMd5 = r.current.contentMd5; adoptIds(doc, r.current); touchRecent(r.current, { keepPlace: target.kind !== 'draft' }); }
       clearError();
       if (r.journalError) status(`Card created, but not linked in today's journal — ${r.journalError}`, { error: true });
       else status(r.linkedInJournal ? "Saved · linked in today's journal" : 'Saved');
@@ -641,7 +620,6 @@ el('open').onclick = () => openInHeptabase(current?.id);
   }
   followToday = true;
   applyRemote(r, { keepSelection: false });
-  record({ kind: r.kind, id: r.id });
   view.dispatch(view.state.tr.setSelection(endOfText(view.state.doc)));
   view.focus();
   touchRecent(r);

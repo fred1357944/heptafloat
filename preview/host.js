@@ -76,6 +76,7 @@
         break;
       case 'touchRecent': {
         const i = RECENTS.findIndex((c) => c.id === m.id);
+        if (m.keepPlace && i >= 0) { Object.assign(RECENTS[i], { title: m.title, chars: m.chars }); break; }
         const old = i >= 0 ? RECENTS.splice(i, 1)[0] : {};
         RECENTS.unshift({ ...old, id: m.id, objectType: m.objectType, title: m.title, chars: m.chars, openedAt: new Date().toISOString() });
         break;
