@@ -46,7 +46,7 @@ Opening Heptabase, finding today's journal, and switching back breaks your flow.
 ## Install
 
 1. **Download** `HeptaFloat-x.y.z.zip` from the [latest release](https://github.com/madeyexz/heptafloat/releases/latest) and double-click it to unzip.
-2. **Drag `HeptaFloat`** into your **Applications** folder.
+2. **Drag `HeptaFloat`** into your **Applications** folder (it needs to live there to update itself).
 3. **Open it.** Because HeptaFloat isn't from the App Store, macOS will warn you the first time:
    - Click **Done** (or **Cancel**) on the warning.
    - Open **System Settings → Privacy & Security**, scroll down, and click **Open Anyway** next to HeptaFloat.
@@ -140,6 +140,7 @@ flowchart LR
   CLI <--> H["Heptabase app<br/>(must be running)"]
   H <--> S["Heptabase sync<br/>your other devices"]
   C -.->|"⌘P · ⌘[ ⌘] · ⌘. pin"| R[("Recent cards<br/>kept on your Mac")]
+  C -.->|"latest version?<br/>at launch + daily"| G["GitHub releases"]
 ```
 
 HeptaFloat never stores your notes, and the only thing it fetches from the internet itself is the latest release from GitHub (to offer updates). It reads and saves through the Heptabase app on your Mac (via Heptabase's CLI), and Heptabase syncs as usual. The only things HeptaFloat keeps are the ⌘P list of cards you've opened and a few cached images.
@@ -168,6 +169,8 @@ HeptaFloat runs entirely on your Mac. It reads and saves your journal through th
 
 **Will it mess up my journal?** HeptaFloat keeps everything it doesn't edit exactly as it was (images, embeds, colors, tables…). Each save is checked against the latest version in Heptabase, so it won't overwrite changes you made there.
 
+**How do I update?** From 0.9.8 on, the card's footer tells you when a new version is out; click it, then **Update** in Settings. If Update says it can't replace HeptaFloat, make sure the app is in your Applications folder and you opened it from there — or download the [latest release](https://github.com/madeyexz/heptafloat/releases/latest) and replace the app by hand.
+
 **Is this made by Heptabase?** No — it's an independent, unofficial companion app.
 
 ---
@@ -177,7 +180,7 @@ HeptaFloat runs entirely on your Mac. It reads and saves your journal through th
 HeptaFloat is a native Swift shell (non-activating floating `NSPanel`, global hotkey, SwiftUI Settings) around a [ProseMirror](https://prosemirror.net) editor in a `WKWebView`. It reads and writes cards with the Heptabase CLI (`heptabase journal|note read/save`, `note create`, `file import/export`, `card list/properties`), with md5 conflict checks. Saves are a queue of per-card snapshots, so switching cards never waits on a save.
 
 ```
-Sources/main.swift   app shell: window, hotkey, menus, Settings, CLI bridge
+Sources/main.swift   app shell: window, hotkey, menus, Settings, CLI bridge, updater
 src/schema.js        lossless ProseMirror schema for Heptabase's card format
 src/editor.js        editor state, autosave, sync, day rollover
 src/commands.js      list editing (indent, split, toggle…)
@@ -193,6 +196,8 @@ preview/             run the editor in a browser with a demo journal
 **Try the editor without Heptabase:** `./preview/serve.sh`, then open <http://localhost:8765/stage.html>.
 
 **Regenerate screenshots and the demo:** `./preview/capture.sh` and `./preview/record-demo.sh` (need `agent-browser` and `ffmpeg`). `open HeptaFloat.app --args --show-settings` opens Settings directly, for its screenshot; `--update-url <url>` checks another address instead of GitHub's latest release (for testing updates).
+
+**Release:** bump `VERSION` in `build.sh`, run `./build.sh`, then `gh release create vX.Y.Z dist/HeptaFloat-X.Y.Z.zip`. The updater relies on that shape: it reads the *latest* release (not drafts or pre-releases), takes the version from the `vX.Y.Z` tag, downloads the asset named exactly `HeptaFloat-X.Y.Z.zip`, checks it against the SHA-256 GitHub records on upload, and only installs a signed app whose `CFBundleShortVersionString` matches the tag.
 
 **Round-trip test:** `bun test/roundtrip.js <folder of journal JSON>` checks that loading and saving a journal changes nothing.
 
