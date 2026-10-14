@@ -17,7 +17,7 @@ pause() { sleep "$1"; }
 
 $AB set viewport 1200 900 2 >/dev/null
 $AB set media light >/dev/null
-$AB record start "$TMP/demo.webm" http://localhost:8765/video.html >/dev/null
+$AB record start "$TMP/demo.webm" http://localhost:8765/video.html ${FPS:+--fps $FPS} >/dev/null
 pause 2.5
 js "demo.overlay('title', true)"; pause 3.2
 js "demo.overlay('title', false)"; pause 0.5
@@ -52,6 +52,13 @@ f "d.querySelector('.toolbar [data-action=color]').dispatchEvent(new w.MouseEven
 f "d.querySelector('.toolbar .sw[data-color-type=background][data-color=green]').dispatchEvent(new w.MouseEvent('mousedown', {bubbles:true, cancelable:true}));"; pause 0.5
 key End; pause 1.2
 
+# lists: Tab indents every selected bullet
+cap '<kbd>Tab</kbd> Indent bullets — every selected one'
+key Down; key End; key Enter; slow "- Onboarding"; key Enter; slow "Fewer fields"; key Enter; slow "Magic links"; pause 0.6
+f "d.querySelector('.toolbar').style.visibility = 'hidden';"   # it would cover "Onboarding"
+key Shift+Home; key Shift+Up; pause 1.0; key Tab; pause 1.2; key End; pause 1.2
+f "d.querySelector('.toolbar').style.visibility = '';"
+
 # 8. open linked cards
 cap 'Open linked cards here — or in Heptabase'
 f "const c = [...d.querySelectorAll('.ProseMirror .chip[data-id]')].find(e => e.textContent.includes('Smart Notes') && e.closest('p')?.textContent.startsWith('Read')); c.scrollIntoView({block: 'center'}); c.dispatchEvent(new w.MouseEvent('mouseover', {bubbles:true}));"; pause 2.0
@@ -82,6 +89,10 @@ $AB set media dark >/dev/null; js "demo.dark(true)"; pause 2.4
 cap 'Every shortcut is yours to change'
 js "demo.overlay('settings', true)"; pause 3.0
 js "demo.overlay('settings', false)"; cap ''; pause 0.4
+
+# updates
+cap 'Updates itself'
+f "w.hf.setUpdate('HeptaFloat 0.9.9 available');"; pause 2.8
 
 # 14. end card
 js "demo.link('Free & open source · github.com/madeyexz/heptafloat')"; js "demo.overlay('title', true)"; pause 3.5
