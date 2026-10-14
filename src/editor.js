@@ -12,7 +12,7 @@ import { inputRules, wrappingInputRule, textblockTypeInputRule, InputRule } from
 import { dropCursor } from 'prosemirror-dropcursor';
 import { gapCursor } from 'prosemirror-gapcursor';
 import { LIST_ITEMS, schemaFor, schemaCovers, serialize, titles, formatDate } from './schema.js';
-import { backspaceAtItemStart, enterInItem, lift, setChecked, sink, toggleTodo } from './commands.js';
+import { backspaceAtItemStart, deleteAtLineEnd, enterInItem, lift, setChecked, sink, toggleTodo } from './commands.js';
 import { caretPlugin, placeholderPlugin, suggestPlugin, toggleHighlight, toolbarPlugin } from './menus.js';
 import { createPalette } from './palette.js';
 import { renderSetup } from './setup.js';
@@ -446,6 +446,22 @@ function buildPlugins(schema) {
   ];
   const remappable = Object.fromEntries(Object.entries(bindings).map(([name, key]) => [key, commandFor(name, schema)]));
   return [
+    // Typing over a selection that spans lines deletes it like Backspace does, so no empty
+    // list item is left behind.
+    new Plugin({ props: {
+      handleTextInput(view, from, to, text) {
+        if (view.state.doc.resolve(from).sameParent(view.state.doc.resolve(to))) return false;
+        view.dispatch(view.state.tr.deleteSelection().insertText(text).scrollIntoView());
+        return true;
+      },
+      handleDOMEvents: { beforeinput(view, event) { // text that doesn't come from a keypress (dictation, autocorrect…)
+        const { $from, $to } = view.state.selection;
+        if (event.inputType !== 'insertText' || !event.data || $from.sameParent($to)) return false;
+        event.preventDefault();
+        view.dispatch(view.state.tr.deleteSelection().insertText(event.data).scrollIntoView());
+        return true;
+      } },
+    } }),
     suggestPlugin(searchCards),
     toolbarPlugin((url) => post({ action: 'openURL', url })),
     inputRules({ rules }),
@@ -453,7 +469,7 @@ function buildPlugins(schema) {
       ...remappable,
       'Mod-z': undo, 'Shift-Mod-z': redo, 'Mod-y': redo,
       Enter: enterInItem,
-      Backspace: backspaceAtItemStart,
+      Backspace: backspaceAtItemStart, Delete: deleteAtLineEnd, 'Ctrl-d': deleteAtLineEnd,
       Tab: sink, 'Shift-Tab': lift,
       Escape: () => { post({ action: 'hide' }); return true; },
     }),
