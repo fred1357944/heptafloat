@@ -41,6 +41,11 @@ $AB press Escape >/dev/null; sleep 0.3; $AB press Meta+o >/dev/null; sleep 0.4; 
 $AB screenshot "$TMP/search.png" >/dev/null; crop "$TMP/search.png" "$D/screenshot-search.png"
 $AB set media light >/dev/null
 
+# Update notice in the footer
+fresh; $AB eval '(() => { const w = document.getElementById("card").contentWindow; w.hf.setUpdate("HeptaFloat 0.9.9 available"); w.document.activeElement.blur(); })()' >/dev/null; sleep 0.4
+$AB screenshot "$TMP/update.png" >/dev/null
+python3 -c "from PIL import Image; Image.open('$TMP/update.png').crop((1300, 1060, 2260, 1430)).save('$D/screenshot-update.png', optimize=True)"
+
 # Animated demo
 fresh
 $AB record start "$TMP/demo.webm" >/dev/null; sleep 1.2

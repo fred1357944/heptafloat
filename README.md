@@ -89,7 +89,8 @@ Notes and journals open in the floating card and are editable just like today's 
 | `@` or `[[` | Mention a card |
 | Select text | Bold, italic, underline, strikethrough, code, link, **highlight & text color** |
 | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>H</kbd> | Highlight the selection in yellow (press again to remove) |
-| <kbd>Tab</kbd> / <kbd>⇧</kbd> <kbd>Tab</kbd> | Indent / outdent a list item |
+| <kbd>Tab</kbd> / <kbd>⇧</kbd> <kbd>Tab</kbd> | Indent / outdent list items — every selected one. On a plain line right below a bullet, <kbd>Tab</kbd> tucks it under that bullet |
+| <kbd>⌫</kbd> at the start of a bullet | Turn it into plain text where it is; press again to join it with the line above |
 | <kbd>⌘</kbd> <kbd>↩</kbd> | Tick or untick a to-do |
 | <kbd>⌘</kbd> <kbd>N</kbd> | New card |
 | <kbd>⌘</kbd> <kbd>.</kbd> | Pin / unpin the card to the top of Recent (⌘P) |
@@ -118,6 +119,10 @@ Press <kbd>⌘</kbd> <kbd>,</kbd> while the card is in front.
 - **Version** — shows when a newer HeptaFloat is out, with **Update**: it downloads the new version from GitHub, makes sure it's exactly the file GitHub published (SHA-256) and a complete, signed HeptaFloat, swaps it in and restarts. If anything goes wrong, your current version stays as it was. **Check Now** checks right away.
 - **Check for updates automatically** — on by default: HeptaFloat asks GitHub for the latest release when it starts and once a day.
 - **Quit HeptaFloat** is at the bottom (or press <kbd>⌘</kbd> <kbd>Q</kbd> while the card is in front).
+
+When a new version is out, the card's footer says so — click it to open Settings, then **Update**.
+
+<p align="center"><img src="docs/screenshot-update.png" width="420" alt="The card's footer: 358 characters · HeptaFloat 0.9.9 available"></p>
 
 **Shortcuts** — every keyboard shortcut in one place. Click one and press new keys to change it; HeptaFloat warns you if the keys are already taken. **Reset All Shortcuts** restores the defaults.
 
