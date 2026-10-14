@@ -4,6 +4,7 @@
 
 import AppKit
 import Carbon.HIToolbox
+import CryptoKit
 import ServiceManagement
 import SwiftUI
 import UniformTypeIdentifiers
@@ -277,6 +278,11 @@ enum Settings {
     }
     static func applyActivationPolicy() {
         NSApp.setActivationPolicy(showInDock ? .regular : .accessory)
+    }
+
+    static var checkForUpdates: Bool {
+        get { defaults.object(forKey: "checkForUpdates") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "checkForUpdates") }
     }
 
     static var fontScale: Double {
@@ -890,6 +896,14 @@ final class JournalWindow: NSObject, WKScriptMessageHandler, WKNavigationDelegat
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         web.evaluateJavaScript("window.hf.setScale(\(Settings.fontScale)); window.hf.setPinned(\(Settings.pinned))")
         pushShortcuts()
+        pushUpdateNotice()
+    }
+
+    /// "HeptaFloat 0.9.8 available" in the footer; clicking it opens Settings.
+    func pushUpdateNotice() {
+        guard let data = try? JSONSerialization.data(withJSONObject: Updater.shared.footerNotice ?? "", options: .fragmentsAllowed),
+              let json = String(data: data, encoding: .utf8) else { return }
+        web.evaluateJavaScript("window.hf && window.hf.setUpdate(\(json))")
     }
 
     /// Sends the editor its keymap: { bold: "Mod-b", … }.
@@ -1005,6 +1019,271 @@ extension Heptabase {
     }
 }
 
+// MARK: - Updates
+
+/// Checks GitHub for a newer release and installs it in place: download the zip, match it against
+/// the SHA-256 GitHub publishes for it, unpack it, check the app inside, swap it with the running
+/// app, relaunch. Nothing on disk changes until the new app has passed every check, and the swap
+/// is a single rename, so a failure at any step leaves the current app as it was.
+final class Updater: ObservableObject {
+    static let shared = Updater()
+
+    static let bundleID = "com.ianhsiao.heptafloat"
+    static let releasesPage = URL(string: "https://github.com/madeyexz/heptafloat/releases/latest")!
+    /// `--update-url <url>` checks another address instead of GitHub (to test failures).
+    static let latestURL: URL = {
+        let args = CommandLine.arguments
+        if let i = args.firstIndex(of: "--update-url"), i + 1 < args.count, let url = URL(string: args[i + 1]) { return url }
+        return URL(string: "https://api.github.com/repos/madeyexz/heptafloat/releases/latest")!
+    }()
+    static var current: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0" }
+
+    struct Release {
+        let version: String
+        let page: URL
+        let zip: URL?
+        let sha256: String? // from the asset's "digest", which GitHub computes on upload
+    }
+
+    struct Failure: Error { let message: String }
+
+    enum State: Equatable {
+        case idle, checking, upToDate, available
+        case downloading(Double)
+        case installing, relaunching
+        case failed(String)
+    }
+
+    @Published private(set) var state = State.idle { didSet { onChange() } }
+    /// The newer release, once a check has found one.
+    @Published private(set) var release: Release? { didSet { onChange() } }
+    /// Lets the card's footer follow along; set by AppDelegate.
+    var onChange: () -> Void = {}
+
+    var busy: Bool {
+        switch state {
+        case .checking, .downloading, .installing, .relaunching: return true
+        default: return false
+        }
+    }
+
+    private var lastCheck = Date.distantPast
+    private var timer: Timer?
+    private var progress: NSKeyValueObservation?
+
+    /// Checks once shortly after launch, then once a day (looked at hourly, so sleep doesn't skip a day).
+    func start() {
+        timer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in self?.checkIfDue() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in self?.checkIfDue() }
+    }
+
+    func checkIfDue() {
+        guard Settings.checkForUpdates, Date().timeIntervalSince(lastCheck) > 23 * 3600 else { return }
+        check(manual: false)
+    }
+
+    /// Automatic checks fail quietly (offline is normal); Check Now reports the problem.
+    func check(manual: Bool) {
+        guard !busy else { return }
+        let before = state
+        state = .checking
+        var request = URLRequest(url: Self.latestURL, timeoutInterval: 20)
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("HeptaFloat/\(Self.current)", forHTTPHeaderField: "User-Agent")
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            let result = Result { try Self.parse(data, response, error) }
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let latest):
+                    self.lastCheck = Date()
+                    if latest.version.compare(Self.current, options: .numeric) == .orderedDescending {
+                        if self.release?.version != latest.version { AppLog.write("update: \(latest.version) is available") }
+                        self.release = latest
+                        self.state = .available
+                    } else {
+                        self.release = nil
+                        self.state = .upToDate
+                    }
+                case .failure(let error):
+                    AppLog.write("update: check failed: \(Self.message(error))")
+                    self.state = manual ? .failed("Couldn't check for updates — \(Self.message(error))") : before
+                }
+            }
+        }.resume()
+    }
+
+    private static func parse(_ data: Data?, _ response: URLResponse?, _ error: Error?) throws -> Release {
+        if let error { throw error }
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard status == 200, let data else { throw Failure(message: "GitHub answered with error \(status).") }
+        guard let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let tag = json["tag_name"] as? String else { throw Failure(message: "GitHub's answer didn't make sense.") }
+        let version = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
+        let asset = (json["assets"] as? [[String: Any]])?.first { $0["name"] as? String == "HeptaFloat-\(version).zip" }
+        let digest = asset?["digest"] as? String ?? ""
+        return Release(version: version,
+                       page: (json["html_url"] as? String).flatMap(URL.init(string:)) ?? releasesPage,
+                       zip: (asset?["browser_download_url"] as? String).flatMap(URL.init(string:)),
+                       sha256: digest.hasPrefix("sha256:") ? digest.dropFirst(7).lowercased() : nil)
+    }
+
+    static func message(_ error: Error) -> String {
+        (error as? Failure)?.message ?? error.localizedDescription
+    }
+
+    // MARK: install
+
+    func install() {
+        guard let release, !busy else { return }
+        let app = Bundle.main.bundleURL
+        if let problem = Self.cantReplace(app) { state = .failed(problem); return }
+        guard let zip = release.zip, let sha256 = release.sha256 else {
+            state = .failed("HeptaFloat \(release.version) has no download it can check, so it wasn't installed.")
+            return
+        }
+        AppLog.write("update: downloading \(zip.absoluteString)")
+        state = .downloading(0)
+        let task = URLSession.shared.downloadTask(with: zip) { file, response, error in
+            do {
+                if let error { throw error }
+                let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                guard status == 200, let file else { throw Failure(message: "The download failed (error \(status)).") }
+                DispatchQueue.main.async { self.state = .installing }
+                // `file` is deleted when this handler returns, so it's moved before anything else.
+                let (newApp, work) = try Self.prepare(file, release: release, sha256: sha256, nextTo: app)
+                try Self.swap(newApp, into: app)
+                AppLog.write("update: installed \(release.version) at \(app.path)")
+                DispatchQueue.main.async { self.relaunch(app, cleaning: work) }
+            } catch {
+                AppLog.write("update: failed: \(Self.message(error))")
+                DispatchQueue.main.async { self.state = .failed(Self.message(error)) }
+            }
+        }
+        progress = task.progress.observe(\.fractionCompleted) { p, _ in
+            DispatchQueue.main.async { if case .downloading = self.state { self.state = .downloading(p.fractionCompleted) } }
+        }
+        task.resume()
+    }
+
+    /// Why the running app can't be replaced where it is, if it can't.
+    private static func cantReplace(_ app: URL) -> String? {
+        if app.pathExtension != "app" { return "Only the HeptaFloat app can update itself." }
+        if app.path.contains("/AppTranslocation/") {
+            return "macOS is running HeptaFloat from a temporary copy. Move HeptaFloat to your Applications folder, open it from there, and try again."
+        }
+        let folder = app.deletingLastPathComponent()
+        if !FileManager.default.isWritableFile(atPath: folder.path) || !FileManager.default.isWritableFile(atPath: app.path) {
+            return "HeptaFloat isn't allowed to replace itself in “\(folder.path)”. Download the update from GitHub instead."
+        }
+        return nil
+    }
+
+    /// Checks the download and unpacks it into a scratch folder on the app's disk; returns the
+    /// new app and the folder.
+    private static func prepare(_ download: URL, release: Release, sha256: String, nextTo app: URL) throws -> (URL, URL) {
+        let fm = FileManager.default
+        let work = try fm.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: app, create: true)
+        do {
+            let zip = work.appendingPathComponent("HeptaFloat-\(release.version).zip")
+            try fm.moveItem(at: download, to: zip)
+            let digest = SHA256.hash(data: try Data(contentsOf: zip, options: .mappedIfSafe)).map { String(format: "%02x", $0) }.joined()
+            guard digest == sha256 else {
+                throw Failure(message: "The download doesn't match the checksum GitHub published for it, so it wasn't installed.")
+            }
+            let unpacked = work.appendingPathComponent("unpacked")
+            try run("/usr/bin/ditto", ["-x", "-k", zip.path, unpacked.path], or: "Couldn't unzip the update.")
+            let newApp = unpacked.appendingPathComponent("HeptaFloat.app")
+            let info = NSDictionary(contentsOf: newApp.appendingPathComponent("Contents/Info.plist"))
+            guard info?["CFBundleIdentifier"] as? String == bundleID,
+                  info?["CFBundleShortVersionString"] as? String == release.version else {
+                throw Failure(message: "The download doesn't contain HeptaFloat \(release.version), so it wasn't installed.")
+            }
+            try run("/usr/bin/codesign", ["--verify", "--deep", "--strict", newApp.path],
+                    or: "The new app's code signature doesn't check out, so it wasn't installed.")
+            return (newApp, work)
+        } catch {
+            try? fm.removeItem(at: work)
+            throw error
+        }
+    }
+
+    private static func run(_ tool: String, _ args: [String], or message: String) throws {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: tool)
+        p.arguments = args
+        let err = Pipe()
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = err
+        try p.run()
+        let output = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        p.waitUntilExit()
+        guard p.terminationStatus == 0 else {
+            AppLog.write("update: \(tool) failed: \(output.trimmingCharacters(in: .whitespacesAndNewlines))")
+            throw Failure(message: message)
+        }
+    }
+
+    /// Puts the new app where the running one is. On APFS it's one atomic swap, so the path always
+    /// holds a whole app; elsewhere the old app moves aside and comes back if the new one can't go in.
+    private static func swap(_ newApp: URL, into app: URL) throws {
+        if renamex_np(newApp.path, app.path, UInt32(RENAME_SWAP)) == 0 { return }
+        let fm = FileManager.default
+        let old = newApp.deletingLastPathComponent().appendingPathComponent("Previous HeptaFloat.app")
+        do { try fm.moveItem(at: app, to: old) } catch {
+            throw Failure(message: "Couldn't replace HeptaFloat in “\(app.deletingLastPathComponent().path)” — \(error.localizedDescription)")
+        }
+        do { try fm.moveItem(at: newApp, to: app) } catch {
+            try? fm.moveItem(at: old, to: app)
+            throw Failure(message: "Couldn't replace HeptaFloat in “\(app.deletingLastPathComponent().path)” — \(error.localizedDescription)")
+        }
+    }
+
+    /// Quits (saving first, as always) and has a small shell script open the new app once this
+    /// process is gone, then delete the scratch folder, which now holds the old app.
+    private func relaunch(_ app: URL, cleaning work: URL) {
+        state = .relaunching
+        let script = """
+            i=0; while kill -0 "$1" 2>/dev/null && [ $i -lt 150 ]; do sleep 0.2; i=$((i+1)); done
+            /usr/bin/open "$2"; rm -rf "$3"
+            """
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/sh")
+        p.arguments = ["-c", script, "sh", "\(getpid())", app.path, work.path]
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        do { try p.run() } catch {
+            state = .failed("HeptaFloat \(release?.version ?? "") is installed — quit and reopen HeptaFloat to start it.")
+            return
+        }
+        NSApp.terminate(nil)
+    }
+
+    // MARK: display
+
+    /// The Version row in Settings.
+    var summary: String {
+        let available = release.map { " · \($0.version) available" } ?? ""
+        switch state {
+        case .idle: return Self.current
+        case .checking: return "\(Self.current) · checking…"
+        case .upToDate: return "\(Self.current) · up to date"
+        case .available, .failed: return Self.current + available
+        case .downloading(let f): return "Downloading \(release?.version ?? "")… \(Int(f * 100))%"
+        case .installing: return "Installing \(release?.version ?? "")…"
+        case .relaunching: return "Restarting…"
+        }
+    }
+
+    /// The card's footer notice, or nil.
+    var footerNotice: String? {
+        guard let release else { return nil }
+        switch state {
+        case .downloading, .installing, .relaunching: return "Updating to \(release.version)…"
+        default: return "HeptaFloat \(release.version) available"
+        }
+    }
+}
+
 // MARK: - Settings window
 
 final class SettingsModel: ObservableObject {
@@ -1014,6 +1293,7 @@ final class SettingsModel: ObservableObject {
     @Published var launchAtLogin = SMAppService.mainApp.status == .enabled
     @Published var showInDock = Settings.showInDock
     @Published var addNewCardsToJournal = Settings.addNewCardsToJournal
+    @Published var checkForUpdates = Settings.checkForUpdates
     @Published var loginProblem: String?
     @Published var connection = ConnectionStatus.checking
     @Published var shortcuts: [String: String] = [:]
@@ -1075,6 +1355,11 @@ final class SettingsModel: ObservableObject {
     func setPinned(_ on: Bool) { Settings.pinned = on; pinned = on; applyPinned() }
     func setFontScale(_ v: Double) { Settings.fontScale = v; fontScale = Settings.fontScale; applyFontScale() }
     func setAddNewCardsToJournal(_ on: Bool) { Settings.addNewCardsToJournal = on; addNewCardsToJournal = on }
+    func setCheckForUpdates(_ on: Bool) {
+        Settings.checkForUpdates = on
+        checkForUpdates = on
+        if on { Updater.shared.checkIfDue() }
+    }
 
     func setShowInDock(_ on: Bool) {
         Settings.showInDock = on
@@ -1174,8 +1459,34 @@ struct ShortcutRow: View {
     }
 }
 
+/// "0.9.7 · 0.9.8 available  [Update]", with progress and any problem below.
+struct VersionRow: View {
+    @ObservedObject var updater: Updater
+
+    var body: some View {
+        LabeledContent("Version") {
+            HStack(spacing: 8) {
+                if updater.busy { ProgressView().controlSize(.small) }
+                Text(updater.summary).foregroundStyle(.secondary).monospacedDigit().fixedSize()
+                if updater.release != nil {
+                    Button("Update", action: updater.install).disabled(updater.busy)
+                } else {
+                    Button("Check Now") { updater.check(manual: true) }.disabled(updater.busy)
+                }
+            }
+        }
+        if case .failed(let problem) = updater.state {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(problem).font(.callout).foregroundStyle(.red).textSelection(.enabled)
+                Link("Download from GitHub", destination: updater.release?.page ?? Updater.releasesPage).font(.callout)
+            }
+        }
+    }
+}
+
 struct GeneralSettings: View {
     @ObservedObject var model: SettingsModel
+    @ObservedObject var updater = Updater.shared
 
     var body: some View {
         Form {
@@ -1247,7 +1558,8 @@ struct GeneralSettings: View {
             }
 
             Section {
-                LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev")
+                VersionRow(updater: updater)
+                Toggle("Check for updates automatically", isOn: Binding(get: { model.checkForUpdates }, set: model.setCheckForUpdates))
                 Button("Quit HeptaFloat") { NSApp.terminate(nil) }
                 Link("HeptaFloat on GitHub", destination: URL(string: "https://github.com/madeyexz/heptafloat")!)
             }
@@ -1335,6 +1647,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             self?.refreshMenu()
         }
         _ = applyShortcuts()
+        Updater.shared.onChange = { [weak self] in DispatchQueue.main.async { self?.journal.pushUpdateNotice() } }
+        Updater.shared.start()
         // `--show-settings` opens Settings instead of the card (used to capture README screenshots)
         if CommandLine.arguments.contains("--show-settings") { showSettings() } else { journal.show() }
     }

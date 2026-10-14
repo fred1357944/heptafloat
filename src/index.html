@@ -100,6 +100,10 @@
   #status.show { display: block; } #status.error { color: var(--text-red-editor); }
   #count { white-space: nowrap; flex: none; }
   #status.show + #count::before { content: "· "; }
+  /* "HeptaFloat 0.9.8 available": opens Settings, where Update is */
+  #update { flex: none; white-space: nowrap; pointer-events: auto; border: 0; padding: 0; background: none; font: inherit; color: var(--active-item); cursor: pointer; }
+  #update::before { content: "· "; color: var(--middle-grey); }
+  body.has-update #status { max-width: calc(100% - 300px); }
 
   /* journal title */
   #jtitle { padding: 6px 28px 6px 26px; user-select: none; -webkit-user-select: none; cursor: default; }
@@ -321,7 +325,7 @@
 </header>
 <div id="setup" hidden></div>
 <div id="main"><div id="jtitle"><div class="weekday" id="weekday"></div><div class="row"><h1 id="bigtitle"></h1><span class="todos" id="todos"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6.2"/><path d="M5.4 8.2l1.8 1.8 3.4-3.6"/></svg><span id="todocount"></span></span></div></div></div>
-<footer><span id="status"></span><span id="count"></span></footer>
+<footer><span id="status"></span><span id="count"></span><button id="update" hidden></button></footer>
 <script src="editor.js"></script>
 </body>
 </html>

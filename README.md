@@ -41,6 +41,7 @@ Opening Heptabase, finding today's journal, and switching back breaks your flow.
 - **Saves as you type** and stays in sync with Heptabase both ways — including cards you delete there.
 - **Always today's page** — at midnight it moves to the new day's journal on its own.
 - **Simple settings** — every shortcut, theme, text size, keep on top, launch at login, and a check that Heptabase is connected.
+- **Updates itself** — when a new version is out, the card's footer says so; click **Update** in Settings and HeptaFloat downloads it, checks it, and restarts into it.
 
 ## Install
 
@@ -50,6 +51,8 @@ Opening Heptabase, finding today's journal, and switching back breaks your flow.
    - Click **Done** (or **Cancel**) on the warning.
    - Open **System Settings → Privacy & Security**, scroll down, and click **Open Anyway** next to HeptaFloat.
    - Confirm with **Open**. You only need to do this once.
+
+From 0.9.8 on, HeptaFloat updates itself (see **Settings → Version**). If you have 0.9.7 or older, download the latest release once by hand.
 
 ### One-time setup in Heptabase
 
@@ -112,6 +115,8 @@ Press <kbd>⌘</kbd> <kbd>,</kbd> while the card is in front.
 - **Show in Dock and menu bar** — off by default, so HeptaFloat works like Raycast: no Dock icon, and the card pops up on whatever screen you're on without ever switching desktops. Turn it on for a Dock icon and the menus at the top of the screen (File, Format, View, Window, Help).
 - **Theme** and **Text size**.
 - **Heptabase** — shows whether HeptaFloat can reach your journal, with **Check Again** and **Open Heptabase**.
+- **Version** — shows when a newer HeptaFloat is out, with **Update**: it downloads the new version from GitHub, makes sure it's exactly the file GitHub published (SHA-256) and a complete, signed HeptaFloat, swaps it in and restarts. If anything goes wrong, your current version stays as it was. **Check Now** checks right away.
+- **Check for updates automatically** — on by default: HeptaFloat asks GitHub for the latest release when it starts and once a day.
 - **Quit HeptaFloat** is at the bottom (or press <kbd>⌘</kbd> <kbd>Q</kbd> while the card is in front).
 
 **Shortcuts** — every keyboard shortcut in one place. Click one and press new keys to change it; HeptaFloat warns you if the keys are already taken. **Reset All Shortcuts** restores the defaults.
@@ -132,7 +137,7 @@ flowchart LR
   C -.->|"⌘P · ⌘[ ⌘] · ⌘. pin"| R[("Recent cards<br/>kept on your Mac")]
 ```
 
-HeptaFloat never stores your notes or talks to the internet itself. It reads and saves through the Heptabase app on your Mac (via Heptabase's CLI), and Heptabase syncs as usual. The only things HeptaFloat keeps are the ⌘P list of cards you've opened and a few cached images.
+HeptaFloat never stores your notes, and the only thing it fetches from the internet itself is the latest release from GitHub (to offer updates). It reads and saves through the Heptabase app on your Mac (via Heptabase's CLI), and Heptabase syncs as usual. The only things HeptaFloat keeps are the ⌘P list of cards you've opened and a few cached images.
 
 **What happens to what you type**
 
@@ -144,7 +149,7 @@ HeptaFloat never stores your notes or talks to the internet itself. It reads and
 
 ## Privacy
 
-HeptaFloat runs entirely on your Mac. It reads and saves your journal through the Heptabase app on your computer and never sends your notes anywhere else. No accounts, no analytics. It keeps a small log on your Mac for troubleshooting (card IDs and error messages, not your text) at `~/Library/Logs/HeptaFloat.log`.
+HeptaFloat runs entirely on your Mac. It reads and saves your journal through the Heptabase app on your computer and never sends your notes anywhere else. No accounts, no analytics. The only internet request HeptaFloat makes itself is asking GitHub for its latest release (at launch and once a day; turn off **Check for updates automatically** to stop it). It keeps a small log on your Mac for troubleshooting (card IDs and error messages, not your text) at `~/Library/Logs/HeptaFloat.log`.
 
 ## FAQ
 
@@ -182,7 +187,7 @@ preview/             run the editor in a browser with a demo journal
 
 **Try the editor without Heptabase:** `./preview/serve.sh`, then open <http://localhost:8765/stage.html>.
 
-**Regenerate screenshots and the demo:** `./preview/capture.sh` and `./preview/record-demo.sh` (need `agent-browser` and `ffmpeg`). `open HeptaFloat.app --args --show-settings` opens Settings directly, for its screenshot.
+**Regenerate screenshots and the demo:** `./preview/capture.sh` and `./preview/record-demo.sh` (need `agent-browser` and `ffmpeg`). `open HeptaFloat.app --args --show-settings` opens Settings directly, for its screenshot; `--update-url <url>` checks another address instead of GitHub's latest release (for testing updates).
 
 **Round-trip test:** `bun test/roundtrip.js <folder of journal JSON>` checks that loading and saving a journal changes nothing.
 

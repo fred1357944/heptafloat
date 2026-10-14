@@ -957,6 +957,12 @@ window.hf = {
     Object.assign(bindings, map);
     if (view) view.updateState(view.state.reconfigure({ plugins: buildPlugins(view.state.schema) }));
   },
+  /** The footer's update notice; empty hides it. */
+  setUpdate(text) {
+    el('update').textContent = text;
+    el('update').hidden = !text;
+    document.body.classList.toggle('has-update', !!text);
+  },
   /** Runs a named command from the app menus. */
   command(name) {
     if (!view) return;
@@ -968,6 +974,7 @@ window.hf = {
 
 el('close').onclick = () => post({ action: 'hide' });
 el('pin').onclick = () => post({ action: 'togglePin' });
+el('update').onclick = () => post({ action: 'settings' });
 el('open').onclick = () => openInHeptabase(current?.id);
 
 /** Until Heptabase answers, show the setup checklist and keep checking; then start the editor. */
