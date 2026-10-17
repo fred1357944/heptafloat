@@ -27,7 +27,7 @@ enum Heptabase {
 
     struct Failure: Error { let message: String }
 
-    static func run(_ args: [String]) throws -> [String: Any] {
+    static func run(_ args: [String], allowEmpty: Bool = false) throws -> [String: Any] {
         guard let cli = cliPath else { throw Failure(message: "Heptabase's CLI is off — turn it on in Heptabase → Settings → AI Features.") }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: cli)
@@ -46,11 +46,11 @@ enum Heptabase {
             AppLog.write("heptabase \(args.prefix(2).joined(separator: " ")) failed: \(e)")
             throw Failure(message: friendly("\(e)"))
         }
-        guard p.terminationStatus == 0, let obj else {
-            let msg = String(data: errData.isEmpty ? data : errData, encoding: .utf8) ?? ""
-            throw Failure(message: friendly(msg))
-        }
-        return obj
+        if p.terminationStatus == 0, let obj { return obj }
+        // trash / tag add / set-property can succeed with an empty body.
+        if allowEmpty, p.terminationStatus == 0 { return [:] }
+        let msg = String(data: errData.isEmpty ? data : errData, encoding: .utf8) ?? ""
+        throw Failure(message: friendly(msg))
     }
 
     /// Short, plain messages for the CLI's errors, which are written for developers.
@@ -195,18 +195,24 @@ enum Heptabase {
         try run(["card", "properties", id])
     }
 
-    /// Cards for the mention menu: recent ones for an empty query, otherwise matches with title hits first.
-    static func searchCards(_ query: String) throws -> [[String: Any]] {
-        var args = ["card", "list", "--limit", "20", "--card-types", "note,journal,pdf,highlightElement,image,video,audio"]
+    /// Cards for the mention menu and the search palette.
+    /// `scope` is "title" (keep title matches only), "content", or "both".
+    /// The CLI has no title-versus-content switch, so title-only is filtered here.
+    static func searchCards(_ query: String, limit: Int = 8, scope: String = "both") throws -> [[String: Any]] {
+        let cap = min(max(limit, 1), 50)
+        var args = ["card", "list", "--limit", "\(min(max(cap, 20), 50))", "--card-types", "note,journal,pdf,highlightElement,image,video,audio"]
         if !query.isEmpty { args += ["-q", query] }
-        let results = (try run(args)["results"] as? [[String: Any]]) ?? []
+        var results = (try run(args)["results"] as? [[String: Any]]) ?? []
         let q = query.lowercased()
-        let ranked = q.isEmpty ? results : results.enumerated().sorted { a, b in
+        if scope == "title", !q.isEmpty {
+            results = results.filter { ($0["title"] as? String ?? "").lowercased().contains(q) }
+        }
+        let ranked = (q.isEmpty || scope == "content") ? results : results.enumerated().sorted { a, b in
             let ta = (a.element["title"] as? String ?? "").lowercased().contains(q)
             let tb = (b.element["title"] as? String ?? "").lowercased().contains(q)
             return ta != tb ? ta : a.offset < b.offset
         }.map(\.element)
-        return Array(ranked.prefix(8))
+        return Array(ranked.prefix(cap))
     }
 
     private static var titleCache: [String: String] = [:]
@@ -235,6 +241,20 @@ enum Heptabase {
                 titleCache[id] = t
             }
             out[id] = titleCache[id]
+        }
+        return out
+    }
+
+    /// Titles for ids pasted as mentions, when the clipboard didn't include them. Call on `titleQueue`.
+    static func titles(for ids: [String]) -> [String: String] {
+        var out: [String: String] = [:]
+        for id in ids {
+            let isDate = id.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) != nil
+            guard id.count == 36 || isDate else { continue }
+            if titleCache[id] == nil, let t = (try? run(["card", "properties", id]))?["title"] as? String, !t.isEmpty {
+                titleCache[id] = t
+            }
+            if let t = titleCache[id] { out[id] = t }
         }
         return out
     }
@@ -355,7 +375,10 @@ struct ShortcutDef {
         .init(id: "newCard", title: "New card", group: "Cards", defaultSpec: "cmd+n", scope: .app),
         .init(id: "search", title: "Search cards", group: "Cards", defaultSpec: "cmd+o", scope: .app),
         .init(id: "recent", title: "Recent cards", group: "Cards", defaultSpec: "cmd+p", scope: .app),
-        .init(id: "today", title: "Today's journal", group: "Cards", defaultSpec: "cmd+shift+d", scope: .app),
+        .init(id: "today", title: "Today's journal", group: "Cards", defaultSpec: "cmd+shift+j", scope: .app),
+        .init(id: "trashCard", title: "Move to Trash", group: "Cards", defaultSpec: "cmd+shift+d", scope: .app),
+        .init(id: "addTag", title: "Add Tag", group: "Cards", defaultSpec: "cmd+t", scope: .app),
+        .init(id: "properties", title: "Properties", group: "Cards", defaultSpec: "cmd+shift+i", scope: .app),
         .init(id: "pinCard", title: "Pin / unpin card", group: "Cards", defaultSpec: "cmd+.", scope: .app),
         .init(id: "back", title: "Back", group: "Cards", defaultSpec: "cmd+[", scope: .app),
         .init(id: "forward", title: "Forward", group: "Cards", defaultSpec: "cmd+]", scope: .app),
@@ -570,7 +593,7 @@ final class HeptabaseFileScheme: NSObject, WKURLSchemeHandler {
 /// Web view whose top strip drags the window, so the card can sit anywhere.
 final class DragWebView: WKWebView {
     static let dragStripHeight: CGFloat = 36
-    static let buttonsWidth: CGFloat = 100
+    static let buttonsWidth: CGFloat = 168
 
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
@@ -875,9 +898,65 @@ final class JournalWindow: NSObject, WKScriptMessageHandler, WKNavigationDelegat
             reply(requestId, [:])
         case "search":
             let query = body["query"] as? String ?? ""
+            let limit = (body["limit"] as? Int) ?? (body["limit"] as? NSNumber)?.intValue ?? 8
+            let scope = body["scope"] as? String ?? "both"
             Heptabase.searchQueue.async {
-                let results = (try? Heptabase.searchCards(query)) ?? []
+                let results = (try? Heptabase.searchCards(query, limit: limit, scope: scope)) ?? []
                 self.reply(requestId, ["results": results])
+            }
+        case "trashCard":
+            guard let id = body["id"] as? String else { return }
+            Heptabase.queue.async {
+                do { _ = try Heptabase.run(["card", "trash", id], allowEmpty: true); self.reply(requestId, [:]) }
+                catch { self.reply(requestId, ["error": Self.message(error)]) }
+            }
+        case "tagList":
+            Heptabase.searchQueue.async {
+                do { self.reply(requestId, ["tags": (try Heptabase.run(["tag", "list"])["tags"] as? [[String: Any]]) ?? []]) }
+                catch { self.reply(requestId, ["error": Self.message(error)]) }
+            }
+        case "tagAdd":
+            guard let cardId = body["cardId"] as? String, let name = body["name"] as? String else { return }
+            Heptabase.queue.async {
+                do { self.reply(requestId, try Heptabase.run(["tag", "add", "--card-id", cardId, "--tag-name", name], allowEmpty: true)) }
+                catch { self.reply(requestId, ["error": Self.message(error)]) }
+            }
+        case "tagRemove":
+            guard let cardId = body["cardId"] as? String, let tagId = body["tagId"] as? String else { return }
+            Heptabase.queue.async {
+                do { _ = try Heptabase.run(["tag", "remove", "--card-id", cardId, "--tag-id", tagId], allowEmpty: true); self.reply(requestId, [:]) }
+                catch { self.reply(requestId, ["error": Self.message(error)]) }
+            }
+        case "properties":
+            guard let id = body["id"] as? String else { return }
+            Heptabase.readQueue.async {
+                do { self.reply(requestId, try Heptabase.run(["card", "properties", id])) }
+                catch { self.reply(requestId, ["error": Self.message(error)]) }
+            }
+        case "tagProperties":
+            guard let id = body["id"] as? String else { return }
+            Heptabase.readQueue.async {
+                do { self.reply(requestId, try Heptabase.run(["tag", "properties", id])) }
+                catch { self.reply(requestId, ["error": Self.message(error)]) }
+            }
+        case "setProperty":
+            guard let cardId = body["cardId"] as? String, let propertyId = body["propertyId"] as? String else { return }
+            let value = body["value"] as? String
+            let json = body["json"] as? String
+            Heptabase.queue.async {
+                do {
+                    var args = ["card", "set-property", cardId, "--property-id", propertyId]
+                    if let json { args += ["--json-value", json] }
+                    else if let value { args += ["--value", value] }
+                    else { self.reply(requestId, ["error": "Nothing to set."]); return }
+                    _ = try Heptabase.run(args, allowEmpty: true)
+                    self.reply(requestId, [:])
+                } catch { self.reply(requestId, ["error": Self.message(error)]) }
+            }
+        case "mentionTitles":
+            let ids = body["ids"] as? [String] ?? []
+            Heptabase.titleQueue.async {
+                self.reply(requestId, ["titles": Heptabase.titles(for: ids)])
             }
         case "log":
             if let line = body["message"] as? String { AppLog.write(line) }
@@ -1828,6 +1907,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         _ = menu("File") { m in
             _ = shortcut(m, "newCard", "New Card")
+            _ = shortcut(m, "addTag", "Add Tag")
+            _ = shortcut(m, "properties", "Properties")
+            _ = shortcut(m, "trashCard", "Move to Trash")
             _ = shortcut(m, "search", "Search Cards…")
             _ = shortcut(m, "recent", "Recent Cards…")
             _ = shortcut(m, "today", "Today's Journal")

@@ -29,7 +29,7 @@ const ICONS = {
 /**
  * host: {
  *   recents(): Promise<[{ id, objectType, title, openedAt, chars, pinned, current }]>,
- *   search(q): Promise<[{ id, objectType, title, lastEditedTime }]>,
+ *   search(q, { scope, limit }): Promise<[{ id, objectType, title, lastEditedTime }]>,
  *   open(card), openInHeptabase(card), pin(card, on), forget(card)
  * }
  */
@@ -39,6 +39,10 @@ export function createPalette(host) {
   root.innerHTML = `
     <div class="palette-panel" role="dialog">
       <input class="palette-input" spellcheck="false" autocomplete="off">
+      <div class="palette-filters">
+        <label><input type="checkbox" data-scope="title"> Title</label>
+        <label><input type="checkbox" data-scope="content"> Content</label>
+      </div>
       <div class="palette-list"></div>
       <div class="palette-hints"></div>
     </div>`;
@@ -46,6 +50,19 @@ export function createPalette(host) {
   const input = root.querySelector('.palette-input');
   const list = root.querySelector('.palette-list');
   const hints = root.querySelector('.palette-hints');
+  const filters = root.querySelector('.palette-filters');
+  const titleBox = filters.querySelector('[data-scope="title"]');
+  const contentBox = filters.querySelector('[data-scope="content"]');
+  const flag = (key) => { const v = localStorage.getItem(key); return v == null ? true : v === '1'; };
+  titleBox.checked = flag('hf-search-title');
+  contentBox.checked = flag('hf-search-content');
+
+  function scope() {
+    const title = titleBox.checked, content = contentBox.checked;
+    if (title && !content) return 'title';
+    if (!title && content) return 'content';
+    return 'both';
+  }
 
   let mode = null, items = [], index = 0, seq = 0, timer = null, all = [];
 
@@ -94,9 +111,34 @@ export function createPalette(host) {
     clearTimeout(timer);
     const q = input.value.trim(), mySeq = ++seq;
     if (!q) { render([]); return; }
+    const which = scope();
     timer = setTimeout(async () => {
-      const results = await host.search(q);
-      if (mySeq === seq && mode === 'search') render([{ title: 'Cards', items: results.map(searchItem) }]);
+      const [results, recents] = await Promise.all([host.search(q, { scope: which }), host.recents()]);
+      if (mySeq !== seq || mode !== 'search') return;
+      const order = new Map(recents.map((c, i) => [c.id, i]));
+      const pinnedIds = new Set(recents.filter((c) => c.pinned).map((c) => c.id));
+      const hits = results.map((c) => ({ ...c }));
+      if (which !== 'content') {
+        const needle = q.toLowerCase();
+        for (const c of recents) {
+          if (!c.pinned || hits.some((h) => h.id === c.id)) continue;
+          if ((c.title || '').toLowerCase().includes(needle)) hits.push({ ...c, objectType: c.objectType, lastEditedTime: c.openedAt });
+        }
+      }
+      const pinned = [], recent = [], rest = [];
+      for (const c of hits) {
+        if (pinnedIds.has(c.id)) pinned.push(c);
+        else if (order.has(c.id)) recent.push(c);
+        else rest.push(c);
+      }
+      const byRecent = (a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0);
+      pinned.sort(byRecent);
+      recent.sort(byRecent);
+      render([
+        { title: 'Pinned', items: pinned.map(searchItem) },
+        { title: 'Recent', items: recent.map(searchItem) },
+        { title: 'Cards', items: rest.map(searchItem) },
+      ]);
     }, 140);
   }
 
@@ -108,6 +150,7 @@ export function createPalette(host) {
     hints.innerHTML = `<span><kbd>↑</kbd><kbd>↓</kbd> Navigate</span><span><kbd>↵</kbd> Open</span>`
       + (which === 'search' ? '<span><kbd>⌘</kbd><kbd>↵</kbd> Heptabase</span>' : '<span><kbd>⌘</kbd><kbd>⌫</kbd> Remove</span>')
       + '<span><kbd>esc</kbd> Close</span>';
+    filters.hidden = which !== 'search';
     root.classList.add('show');
     input.focus();
     if (which === 'recent') { all = await host.recents(); showRecents(); } else render([]);
@@ -135,6 +178,11 @@ export function createPalette(host) {
   }
 
   input.addEventListener('input', () => { index = 0; mode === 'search' ? runSearch() : showRecents(); });
+  filters.addEventListener('change', () => {
+    localStorage.setItem('hf-search-title', titleBox.checked ? '1' : '0');
+    localStorage.setItem('hf-search-content', contentBox.checked ? '1' : '0');
+    if (mode === 'search') runSearch();
+  });
   input.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowDown' || (e.ctrlKey && e.key === 'n')) { e.preventDefault(); move(1); }
     else if (e.key === 'ArrowUp' || (e.ctrlKey && e.key === 'p')) { e.preventDefault(); move(-1); }

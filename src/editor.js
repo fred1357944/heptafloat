@@ -2,7 +2,7 @@
 // through the Heptabase CLI; this file owns the editor, autosave, polling, and which card is shown:
 // today's journal by default (rolling over at midnight), or any note/journal opened with ⌘O / ⌘P.
 
-import { Node } from 'prosemirror-model';
+import { Node, Slice } from 'prosemirror-model';
 import { EditorState, Plugin, Selection, TextSelection } from 'prosemirror-state';
 import { EditorView } from 'prosemirror-view';
 import { history, undo, redo } from 'prosemirror-history';
@@ -15,6 +15,8 @@ import { LIST_ITEMS, schemaFor, schemaCovers, serialize, titles, formatDate } fr
 import { backspaceAtItemStart, deleteAtLineEnd, enterInItem, lift, setChecked, sink, toggleTodo } from './commands.js';
 import { caretPlugin, placeholderPlugin, suggestPlugin, toggleHighlight, toolbarPlugin } from './menus.js';
 import { createPalette } from './palette.js';
+import { createPropsPanel } from './props-panel.js';
+import { htmlIsRich, htmlToDoc, markdownToDoc, plainLooksRich } from './paste.js';
 import { renderSetup } from './setup.js';
 
 const SAVE_DELAY = 600;
@@ -48,8 +50,8 @@ function log(message) { post({ action: 'log', message }); }
 window.addEventListener('error', (e) => log(`error: ${e.message} at ${e.filename}:${e.lineno}`));
 window.addEventListener('unhandledrejection', (e) => log(`unhandled: ${e.reason?.stack ?? e.reason}`));
 
-async function searchCards(query) {
-  const r = await call('search', { query });
+async function searchCards(query, { limit = 8, scope = 'both' } = {}) {
+  const r = await call('search', { query, limit, scope });
   return r.results || [];
 }
 
@@ -219,6 +221,8 @@ function forgetJournal() {
 /** Switches the editor to another card. The card you leave is snapshotted and saves in the
  *  background, so switching (and ⌘N) is immediate and nothing typed is lost. */
 async function show(target, { focusEnd = true, keepPlace = false } = {}) {
+  props.close();
+  cardMenu.close();
   if (current && target.kind === current.kind && target.id === current.id) { view?.focus(); return; }
   if (target.kind === 'draft' && current?.kind === 'draft' && !dirty) { view?.focus(); return; }
   const seq = ++navSeq;
@@ -301,7 +305,8 @@ const bindings = {
   bold: 'Mod-b', italic: 'Mod-i', underline: 'Mod-u', strike: 'Mod-Shift-x', code: 'Mod-e', link: 'Mod-k',
   highlight: 'Mod-Shift-h', toggleTodo: 'Mod-Enter', paragraph: 'Mod-Alt-0',
   heading1: 'Mod-Alt-1', heading2: 'Mod-Alt-2', heading3: 'Mod-Alt-3',
-  pinCard: 'Mod-.', back: 'Mod-[', forward: 'Mod-]', newCard: 'Mod-n', search: 'Mod-o', recent: 'Mod-p', today: 'Mod-Shift-d', openInHeptabase: 'Mod-Shift-o',
+  pinCard: 'Mod-.', back: 'Mod-[', forward: 'Mod-]', newCard: 'Mod-n', search: 'Mod-o', recent: 'Mod-p',
+  today: 'Mod-Shift-j', trashCard: 'Mod-Shift-d', addTag: 'Mod-t', properties: 'Mod-Shift-i', openInHeptabase: 'Mod-Shift-o',
 };
 
 /** Named commands, run from the keymap here or from the app's menus. */
@@ -321,6 +326,9 @@ function commandFor(name, schema) {
     back: run(() => step(1)),     // ⌘[ — older
     forward: run(() => step(-1)), // ⌘] — newer
     today: run(() => show({ kind: 'journal', id: today() })),
+    trashCard: run(() => requestTrash()),
+    addTag: run(() => props.toggle('tags')),
+    properties: run(() => props.toggle('fields')),
     openInHeptabase: run(() => { if (current?.kind !== 'draft') openInHeptabase(current?.id); }),
   }[name];
 }
@@ -336,7 +344,7 @@ const palette = createPalette({
     pruneDeleted(cards, 3_000).then((gone) => { if (gone.length) palette.reload(); }); // drop cards deleted in Heptabase
     return list.sort((a, b) => (b.current ? 1 : 0) - (a.current ? 1 : 0));
   },
-  search: searchCards,
+  search: (q, opts = {}) => searchCards(q, { limit: opts.limit ?? 30, scope: opts.scope ?? 'both' }),
   open: (card) => openHere(card),
   openInHeptabase: (card) => openInHeptabase(card.id),
   pin: (card, on) => call('pinCard', { id: card.id, pinned: on }),
@@ -347,6 +355,168 @@ const palette = createPalette({
     const key = keyName(e);
     return key === normalize(bindings.search) ? 'search' : key === normalize(bindings.recent) ? 'recent' : null;
   },
+});
+
+const props = createPropsPanel({
+  ensureCard: () => ensureCard(),
+  tags: () => call('tagList'),
+  properties: (id) => call('properties', { id }),
+  tagProperties: (id) => call('tagProperties', { id }),
+  addTag: (cardId, name) => call('tagAdd', { cardId, name }),
+  removeTag: (cardId, tagId) => call('tagRemove', { cardId, tagId }),
+  setProperty: (cardId, propertyId, wire) => call('setProperty', { cardId, propertyId, ...wire }),
+  status: (text) => status(text, { error: true }),
+  onClose: () => view?.focus(),
+});
+
+/** Saves a new card first, so a tag or a property has a real Heptabase id to land on. */
+async function ensureCard() {
+  if (!current || !view) return null;
+  if (current.kind === 'draft') {
+    if (!view.state.doc.textContent.trim()) { status('Type something first'); return null; }
+    dirty = true;
+    await save();
+    if (!current || current.kind === 'draft') { status('Not saved yet — try again in a moment'); return null; }
+  }
+  return current;
+}
+
+let trashing = false;
+
+const confirmBox = (() => {
+  const root = document.createElement('div');
+  root.className = 'confirm-overlay';
+  root.innerHTML = `<div class="confirm" role="dialog"><p></p><div class="confirm-actions"><button type="button" data-act="cancel">Cancel</button><button type="button" data-act="ok">OK</button></div></div>`;
+  document.body.append(root);
+  const text = root.querySelector('p');
+  const ok = root.querySelector('[data-act="ok"]');
+  let resolve = null;
+  function close(answer) { root.classList.remove('show'); const done = resolve; resolve = null; done?.(answer); }
+  root.addEventListener('mousedown', (e) => { if (e.target === root) close(false); });
+  root.querySelector('[data-act="cancel"]').onclick = () => close(false);
+  ok.onclick = () => close(true);
+  return {
+    ask({ message, okLabel, danger }) {
+      text.textContent = message;
+      ok.textContent = okLabel;
+      ok.classList.toggle('danger', !!danger);
+      root.classList.add('show');
+      ok.focus();
+      return new Promise((r) => { resolve = r; });
+    },
+    close: () => { if (resolve) close(false); },
+    get isOpen() { return root.classList.contains('show'); },
+  };
+})();
+
+const cardMenu = (() => {
+  const root = document.createElement('div');
+  root.className = 'cardmenu';
+  root.innerHTML = `
+    <button type="button" data-act="tag">Add tag <kbd>⌘T</kbd></button>
+    <button type="button" data-act="open">Open in Heptabase</button>
+    <div class="sep"></div>
+    <button type="button" data-act="trash" class="danger"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 4.5h9M6.5 4.5V3.2h3V4.5M5 4.5l.6 8.2h4.8l.6-8.2"/></svg>Move to Trash <kbd>⌘⇧D</kbd></button>`;
+  document.body.append(root);
+  function close() { root.classList.remove('show'); }
+  root.addEventListener('mousedown', (e) => {
+    const btn = e.target.closest('[data-act]');
+    if (!btn || btn.disabled) return;
+    e.preventDefault();
+    const act = btn.dataset.act;
+    close();
+    if (act === 'tag') props.toggle('tags');
+    else if (act === 'open') { if (current?.kind !== 'draft') openInHeptabase(current?.id); }
+    else if (act === 'trash') requestTrash();
+  });
+  return {
+    close,
+    get isOpen() { return root.classList.contains('show'); },
+    show(x, y) {
+      const note = current?.kind === 'note';
+      const trash = root.querySelector('[data-act="trash"]');
+      trash.disabled = !note;
+      trash.title = note ? '' : 'Only notes can be moved to the trash';
+      root.classList.add('show');
+      const w = root.offsetWidth, h = root.offsetHeight;
+      root.style.left = `${Math.max(8, Math.min(x, window.innerWidth - w - 8))}px`;
+      root.style.top = `${Math.max(8, Math.min(y, window.innerHeight - h - 8))}px`;
+    },
+  };
+})();
+
+function shiftDay(delta) {
+  if (current?.kind !== 'journal' || !isDate(current.id)) return;
+  const [y, m, d] = current.id.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() + delta);
+  const id = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+  show({ kind: 'journal', id });
+}
+
+async function discardDraft() {
+  const draftId = current?.kind === 'draft' ? current.id : null;
+  dirty = false;
+  clearTimeout(saveTimer);
+  if (draftId) generation.set(cacheKey({ kind: 'draft', id: draftId }), (generation.get(cacheKey({ kind: 'draft', id: draftId })) ?? 0) + 1);
+  await save();
+  const created = draftId && createdFrom.get(draftId);
+  if (created) {
+    trashing = true;
+    try { await call('trashCard', { id: created }); await call('forgetCard', { id: created }); }
+    finally { trashing = false; }
+  }
+  await show({ kind: 'journal', id: today() });
+  status(draftId && view ? 'Closed without saving' : 'Closed', { duration: 2500 });
+}
+
+async function requestTrash() {
+  cardMenu.close();
+  if (!current) return;
+  if (current.kind === 'draft') {
+    const typed = !!view?.state.doc.textContent.trim();
+    if (typed) {
+      const ok = await confirmBox.ask({ message: 'Discard this new card? It has not been saved.', okLabel: 'Discard', danger: true });
+      if (!ok) return;
+    }
+    await discardDraft();
+    return;
+  }
+  if (current.kind !== 'note') { status('Only notes can be moved to the trash'); return; }
+  const ok = await confirmBox.ask({ message: 'Move this note to the trash? You can restore it in Heptabase.', okLabel: 'Move to Trash', danger: true });
+  if (!ok || current?.kind !== 'note') return;
+  const id = current.id;
+  await save();
+  trashing = true;
+  try {
+    const r = await call('trashCard', { id });
+    if (r.error) { status(r.error, { error: true }); return; }
+    const key = cacheKey({ kind: 'note', id });
+    generation.set(key, (generation.get(key) ?? 0) + 1);
+    dirty = false;
+    clearTimeout(saveTimer);
+    cardCache.delete(key);
+    await call('forgetCard', { id });
+    await show({ kind: 'journal', id: today() });
+    status('Moved to trash', { duration: 2500 });
+  } finally { trashing = false; }
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if (confirmBox.isOpen) { e.preventDefault(); e.stopPropagation(); confirmBox.close(); return; }
+  if (cardMenu.isOpen) { e.preventDefault(); e.stopPropagation(); cardMenu.close(); return; }
+  if (props.isOpen) { e.preventDefault(); e.stopPropagation(); props.close(); return; }
+  if (palette.isOpen) { e.preventDefault(); e.stopPropagation(); palette.close(); return; }
+}, true);
+document.addEventListener('mousedown', (e) => { if (cardMenu.isOpen && !e.target.closest('.cardmenu')) cardMenu.close(); });
+document.addEventListener('contextmenu', (e) => {
+  const sel = window.getSelection();
+  if (sel && !sel.isCollapsed && sel.toString().trim()) return;
+  if (e.target.closest('input, textarea, .props-panel, .palette-panel, .cardmenu, .confirm, .chip, img, a')) return;
+  if (!e.target.closest('header, #jtitle, .ProseMirror, #main')) return;
+  e.preventDefault();
+  cardMenu.show(e.clientX, e.clientY);
 });
 
 /** "Mod-Shift-o" in a fixed modifier order, so keys typed and keys bound compare equal. */
@@ -569,6 +739,9 @@ function updateCount() {
 function setTitle(result, json) {
   const title = result.title || (isDate(result.id) ? formatDate(result.id) : 'Untitled');
   el('title').textContent = title;
+  const kindLabel = { journal: 'Journal', note: 'Note', draft: 'New card' }[result.kind] || 'Card';
+  if (el('kind')) el('kind').textContent = kindLabel;
+  if (el('datepick') && result.kind === 'journal' && isDate(result.id)) el('datepick').value = result.id;
   if (result.kind === 'draft') {
     el('weekday').textContent = '';
     el('jtitle').hidden = true; // the title line is in the card itself
@@ -618,11 +791,20 @@ function load(result, { keepSelection } = {}) {
       scrollThreshold: { top: 64, bottom: 72, left: 0, right: 0 },
       scrollMargin: { top: 64, bottom: 72, left: 0, right: 0 },
       // Pasted or dropped images are imported into Heptabase, then inserted like Heptabase does.
-      handlePaste(_v, event) {
+      handlePaste(editor, event) {
         const files = [...(event.clipboardData?.items || [])].filter((i) => i.kind === 'file' && i.type.startsWith('image/')).map((i) => i.getAsFile());
-        if (!files.length) return false;
+        if (files.length) {
+          event.preventDefault();
+          files.forEach((f) => insertImage(f));
+          return true;
+        }
+        const html = event.clipboardData?.getData('text/html') || '';
+        const text = event.clipboardData?.getData('text/plain') || '';
+        let parsed = null;
+        if (/<hepta-/i.test(html) || (htmlIsRich(html) && !plainLooksRich(text))) parsed = htmlToDoc(html);
+        else if (plainLooksRich(text)) parsed = markdownToDoc(text);
+        if (!parsed || !insertParsed(editor, parsed)) return false;
         event.preventDefault();
-        files.forEach((f) => insertImage(f));
         return true;
       },
       handleDrop(_v, event) {
@@ -798,7 +980,9 @@ async function send(snap) {
   }
 
   if (/trash/i.test(r.error ?? '')) {
-    // The card was moved to Heptabase's trash: keep what you wrote as a new card.
+    // Moved to the trash from this app: don't recreate it. A delete that happened in
+    // Heptabase while we still had typing becomes a new card instead.
+    if (trashing) return;
     await rescueFromTrash({ target, doc: latestDoc.get(firstKey) ?? doc, shown: isShown() });
     return;
   }
@@ -976,6 +1160,44 @@ el('close').onclick = () => post({ action: 'hide' });
 el('pin').onclick = () => post({ action: 'togglePin' });
 el('update').onclick = () => post({ action: 'settings' });
 el('open').onclick = () => openInHeptabase(current?.id);
+el('add').onclick = () => show({ kind: 'draft' });
+el('info').onclick = () => props.toggle('fields');
+el('prevday').onclick = () => shiftDay(-1);
+el('nextday').onclick = () => shiftDay(1);
+el('pickday').onclick = () => {
+  const pick = el('datepick');
+  if (current && isDate(current.id)) pick.value = current.id;
+  pick.showPicker?.() || pick.click();
+};
+el('datepick').onchange = () => { if (el('datepick').value) show({ kind: 'journal', id: el('datepick').value }); };
+
+/** Drops a parsed paste into the selection. A single paragraph lands inside the current one. */
+function insertParsed(editor, parsed) {
+  let node;
+  try {
+    node = Node.fromJSON(editor.state.schema, parsed.doc);
+    node.check();
+  } catch (e) {
+    log(`paste kept as text: ${e?.message ?? e}`);
+    return false;
+  }
+  const { from, to, $from } = editor.state.selection;
+  const single = node.childCount === 1 && node.firstChild?.type.name === 'paragraph' && $from.parent.isTextblock;
+  const tr = single
+    ? editor.state.tr.replaceWith(from, to, node.firstChild.content)
+    : editor.state.tr.replaceSelection(new Slice(node.content, 0, 0));
+  editor.dispatch(tr.scrollIntoView());
+  if (parsed.titles && Object.keys(parsed.titles).length) window.hf.titles(parsed.titles);
+  const ids = [];
+  node.descendants((n) => {
+    for (const key of ['cardId', 'pdfCardId', 'webCardId', 'highlightElementId', 'whiteboardId', 'tagId']) {
+      const id = n.attrs?.[key];
+      if (id && !parsed.titles?.[id] && !titles[id]) ids.push(id);
+    }
+  });
+  if (ids.length) call('mentionTitles', { ids }).then((r) => { if (r.titles) window.hf.titles(r.titles); });
+  return true;
+}
 
 /** Until Heptabase answers, show the setup checklist and keep checking; then start the editor. */
 let connectTimer = null, connecting = false, started = false;

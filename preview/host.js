@@ -16,7 +16,7 @@
     { id: 'aaaaaaaa-0000-4000-8000-000000000011', objectType: 'note', title: 'Onboarding interview notes', chars: 3310, openedAt: ago(24 * 16) },
   ];
   const CARDS = [
-    { id: 'aaaaaaaa-0000-4000-8000-000000000002', objectType: 'note', title: 'How to Take Smart Notes', lastEditedTime: ago(5) },
+    { id: 'aaaaaaaa-0000-4000-8000-000000000002', objectType: 'note', title: 'How to Take Smart Notes', body: 'slip-box zettelkasten', lastEditedTime: ago(5) },
     { id: 'aaaaaaaa-0000-4000-8000-000000000003', objectType: 'note', title: 'Smart defaults in onboarding', lastEditedTime: ago(24 * 3) },
     { id: 'aaaaaaaa-0000-4000-8000-000000000001', objectType: 'note', title: 'Product strategy 2027', lastEditedTime: ago(26) },
     { id: 'aaaaaaaa-0000-4000-8000-000000000004', objectType: 'pdf', title: 'The Mom Test.pdf', lastEditedTime: ago(24 * 40) },
@@ -45,6 +45,14 @@
     ] } },
   };
   const docs = {};
+  window.HF_TAGS = [{ id: 'tag-demo-1', name: 'Demo' }];
+  window.HF_TAG_PROPS = {
+    'tag-demo-1': { tagId: 'tag-demo-1', tagName: 'Demo', properties: [
+      { id: 'prop-status', name: 'Status', type: 'select', options: [{ id: 'opt-a', name: 'Open' }, { id: 'opt-b', name: 'Done' }] },
+      { id: 'prop-note', name: 'Note', type: 'text' },
+    ] },
+  };
+  window.HF_CARD_TAGS = {};
   const title = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   const postMessage = async (m) => {
     if (!content) {
@@ -131,7 +139,63 @@
         break;
       case 'search': {
         const q = (m.query || '').toLowerCase();
-        reply({ results: CARDS.filter((c) => !q || c.title.toLowerCase().includes(q)) });
+        const scope = m.scope || 'both';
+        const limit = m.limit || 8;
+        const results = CARDS.filter((c) => {
+          if (!q) return true;
+          const inTitle = (c.title || '').toLowerCase().includes(q);
+          const inBody = (c.body || '').toLowerCase().includes(q);
+          if (scope === 'title') return inTitle;
+          if (scope === 'content') return inBody || inTitle;
+          return inTitle || inBody;
+        });
+        reply({ results: results.slice(0, limit) });
+        break;
+      }
+      case 'trashCard':
+        window.TRASHED = m.id;
+        RECENTS = RECENTS.filter((c) => c.id !== m.id);
+        reply({});
+        break;
+      case 'tagList':
+        reply({ tags: window.HF_TAGS });
+        break;
+      case 'tagAdd': {
+        let tag = window.HF_TAGS.find((t) => t.name.toLowerCase() === String(m.name || '').toLowerCase());
+        if (!tag) {
+          tag = { id: `tag-${Date.now()}`, name: m.name };
+          window.HF_TAGS.push(tag);
+          window.HF_TAG_PROPS[tag.id] = { tagId: tag.id, tagName: tag.name, properties: [] };
+        }
+        const list = window.HF_CARD_TAGS[m.cardId] ||= [];
+        if (!list.some((t) => t.tagId === tag.id)) {
+          list.push({ tagId: tag.id, tagName: tag.name, properties: (window.HF_TAG_PROPS[tag.id].properties || []).map((p) => ({ ...p, value: null })) });
+        }
+        reply({});
+        break;
+      }
+      case 'tagRemove':
+        window.HF_CARD_TAGS[m.cardId] = (window.HF_CARD_TAGS[m.cardId] || []).filter((t) => t.tagId !== m.tagId);
+        reply({});
+        break;
+      case 'properties':
+        reply({ cardId: m.id, cardType: 'note', title: '', tags: window.HF_CARD_TAGS[m.id] || [] });
+        break;
+      case 'tagProperties':
+        reply(window.HF_TAG_PROPS[m.id] || { tagId: m.id, tagName: '', properties: [] });
+        break;
+      case 'setProperty': {
+        for (const tag of window.HF_CARD_TAGS[m.cardId] || []) {
+          const prop = (tag.properties || []).find((p) => p.id === m.propertyId);
+          if (prop) prop.value = m.json != null ? JSON.parse(m.json) : m.value ?? null;
+        }
+        reply({});
+        break;
+      }
+      case 'mentionTitles': {
+        const titles = {};
+        for (const id of m.ids || []) if (TITLES[id]) titles[id] = TITLES[id];
+        reply({ titles });
         break;
       }
       case 'recents':
